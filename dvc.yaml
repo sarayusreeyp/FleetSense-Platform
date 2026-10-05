@@ -1,0 +1,21 @@
+stages:
+  etl:
+    cmd: python -m fleetsense.workflows.etl
+    deps:
+      - configs/config.yaml
+      - src/fleetsense/etl
+      - src/fleetsense/workflows/etl.py
+    outs:
+      - data/features:
+          persist: true
+
+  train:
+    cmd: python -m fleetsense.workflows.train
+    deps:
+      - configs/model.yaml
+      - data/features
+      - src/fleetsense/ml
+      - src/fleetsense/workflows/train.py
+    outs:
+      - artifacts/models:
+          persist: true

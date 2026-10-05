@@ -54,10 +54,14 @@ mlruns/
 mlflow.db
 
 # Data & DVC cache
-data/raw/
-data/processed/
-data/features/
-data/tmp/
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/features/*
+!data/features/.gitkeep
+data/tmp/*
+!data/tmp/.gitkeep
 data/dvc_remote/
 .dvc/cache/
 .dvc/tmp/
@@ -67,6 +71,13 @@ metadata/*.json
 !metadata/.gitkeep
 
 # Artifacts & Models
-artifacts/
+artifacts/*
+!artifacts/models/
+artifacts/models/*
+!artifacts/models/.gitkeep
+!artifacts/metadata/
+artifacts/metadata/*
+!artifacts/metadata/.gitkeep
+!artifacts/.gitkeep
 *.pkl
 *.joblib

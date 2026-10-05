@@ -83,8 +83,7 @@ FleetSense-Platform/
 │   └── cd.yml
 ├── .dvc/                      # Data Version Control configuration
 ├── configs/                   # Type-safe YAML configurations (OmegaConf/Hydra)
-│   ├── app.yaml               # App and environment settings
-│   ├── storage.yaml           # Storage backend configs (Local / Azure)
+│   ├── config.yaml            # App, storage, data & ingestion settings
 │   └── model.yaml             # ML model hyperparameters
 ├── deploy/                    # Cloud deployment templates & scripts
 │   ├── azure/                 # Azure Container Apps & Bicep IaC

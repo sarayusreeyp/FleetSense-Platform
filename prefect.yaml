@@ -11,10 +11,16 @@ pull:
 deployments:
   - name: etl-monthly
     entrypoint: src/fleetsense/workflows/etl.py:etl_flow
-
     schedules:
       - cron: "0 2 1 * *"
         timezone: "Asia/Kolkata"
+    work_pool:
+      name: fleetsense-pool
 
+  - name: train-weekly
+    entrypoint: src/fleetsense/workflows/train.py:train_flow
+    schedules:
+      - cron: "0 4 * * 0"
+        timezone: "Asia/Kolkata"
     work_pool:
       name: fleetsense-pool
