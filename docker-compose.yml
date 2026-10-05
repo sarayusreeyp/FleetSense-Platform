@@ -51,3 +51,15 @@ services:
     depends_on:
       - prometheus
     restart: unless-stopped
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.14.0
+    container_name: fleetsense-mlflow
+    ports:
+      - "5000:5000"
+    command: mlflow server --backend-store-uri sqlite:////mlflow/mlflow.db --default-artifact-root /mlflow/artifacts --host 0.0.0.0 --port 5000
+    volumes:
+      - ./artifacts/mlruns:/mlflow/artifacts
+      - ./metadata:/mlflow
+    restart: unless-stopped
+
