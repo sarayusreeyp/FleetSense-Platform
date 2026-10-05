@@ -1,0 +1,20 @@
+name: fleetsense
+
+build: null
+
+push: null
+
+pull:
+  - prefect.deployments.steps.set_working_directory:
+      directory: .
+
+deployments:
+  - name: etl-monthly
+    entrypoint: src/fleetsense/workflows/etl.py:etl_flow
+
+    schedules:
+      - cron: "0 2 1 * *"
+        timezone: "Asia/Kolkata"
+
+    work_pool:
+      name: fleetsense-pool

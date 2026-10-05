@@ -1,0 +1,112 @@
+# ==============================================================================
+# FleetSense - Production Grade ML Platform
+# pyproject.toml
+# ==============================================================================
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# ==============================================================================
+# Project Metadata
+# ==============================================================================
+
+[project]
+name = "fleetsense"
+version = "0.1.0"
+description = "Production-grade Machine Learning platform for taxi demand and trip duration forecasting."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+authors = [
+    { name = "Sarayu Padala" }
+]
+
+keywords = [
+    "machine-learning",
+    "mlops",
+    "prefect",
+    "fastapi",
+    "azure",
+    "forecasting",
+    "taxi-demand"
+]
+
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "License :: OSI Approved :: MIT License",
+]
+
+# Runtime dependencies
+dependencies = [
+    "pydantic>=2.8",
+    "PyYAML>=6.0",
+    "python-dotenv>=1.0",
+    "requests>=2.32",
+    "pandas>=2.2,<4.0",
+    "pyarrow>=18.0,<24.0",
+    "scikit-learn>=1.5.0",
+    "prefect>=3.0.0",
+    "azure-storage-blob>=12.20.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.28.0",
+    "prometheus-client>=0.20.0",
+    "joblib>=1.3.0",
+]
+
+# ==============================================================================
+# URLs
+# ==============================================================================
+
+[project.urls]
+Homepage = "https://github.com/sarayusreeyp/FleetSense-Platform"
+Repository = "https://github.com/sarayusreeyp/FleetSense-Platform"
+Issues = "https://github.com/sarayusreeyp/FleetSense-Platform/issues"
+
+# ==============================================================================
+# Optional Dependencies
+# ==============================================================================
+
+[project.optional-dependencies]
+
+dev = [
+    "pytest",
+    "black",
+    "ruff",
+    "isort",
+    "pre-commit"
+]
+
+docs = [
+    "mkdocs",
+    "mkdocs-material"
+]
+
+monitoring = [
+    "prometheus-client"
+]
+
+# ==============================================================================
+# Package Discovery
+# ==============================================================================
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# ==============================================================================
+# Pytest Configuration
+# ==============================================================================
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore:Logger 'prefect.task_runs' attempted to send logs to the API:UserWarning",
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]

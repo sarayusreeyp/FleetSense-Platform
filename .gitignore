@@ -1,0 +1,72 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Logs
+logs/
+*.log
+
+# Environment Variables
+.env
+.env.*
+!.env.example
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE & OS Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Pytest & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# MLflow
+mlruns/
+mlflow.db
+
+# Data & DVC cache
+data/raw/
+data/processed/
+data/features/
+data/tmp/
+data/dvc_remote/
+.dvc/cache/
+.dvc/tmp/
+
+# Metadata runtime state
+metadata/*.json
+!metadata/.gitkeep
+
+# Artifacts & Models
+artifacts/
+*.pkl
+*.joblib

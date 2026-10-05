@@ -1,0 +1,29 @@
+app:
+  name: FleetSense
+  version: "0.1.0"
+  environment: development
+
+data:
+  raw_data_path: data/raw
+  processed_data_path: data/processed
+  artifacts_path: artifacts
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  timeout: 30
+  retry_attempts: 3
+
+logging:
+  level: INFO
+
+storage:
+  backend: local
+  local_data_dir: data
+  azure_container_name: "fleetsense-data"
+  azure_connection_string: ""
+
+ingestion:
+  dataset: yellow
+  start_year: 2026
+  start_month: 1

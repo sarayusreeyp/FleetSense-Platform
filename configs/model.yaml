@@ -1,0 +1,29 @@
+model:
+  name: "trip_duration_regressor"
+  algorithm: "HistGradientBoostingRegressor"
+  target_column: "trip_duration_minutes"
+  max_duration_minutes: 1440.0
+  features:
+    - VendorID
+    - passenger_count
+    - trip_distance
+    - PULocationID
+    - DOLocationID
+    - pickup_hour
+    - pickup_day_of_week
+    - pickup_month
+    - pickup_day
+    - is_weekend
+  categorical_features:
+    - VendorID
+    - PULocationID
+    - DOLocationID
+  random_state: 42
+  n_estimators: 100
+  learning_rate: 0.1
+  max_depth: 15
+  train_ratio: 0.70
+  validation_ratio: 0.15
+  test_ratio: 0.15
+  mlflow_tracking_uri: "sqlite:///mlflow.db"
+  mlflow_experiment_name: "fleetsense-trip-duration"

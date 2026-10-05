@@ -1,0 +1,6 @@
+[core]
+    remote = local_remote
+['remote "local_remote"']
+    url = ../data/dvc_remote
+['remote "azure_remote"']
+    url = azure://fleetsense-data/dvc
