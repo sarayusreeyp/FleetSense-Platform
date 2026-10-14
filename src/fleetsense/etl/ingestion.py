@@ -4,8 +4,6 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
-
 from fleetsense.core.config import settings
 from fleetsense.core.constants.paths import TMP_DATA_DIR
 from fleetsense.core.logger import get_logger

@@ -111,6 +111,7 @@ filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::UserWarning",
 ]
+addopts = "-p no:logging"
 
 # ==============================================================================
 # Code Quality Configurations

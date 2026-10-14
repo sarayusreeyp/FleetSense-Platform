@@ -19,6 +19,10 @@ jobs:
       contents: read
       packages: write
 
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+      tags: ${{ steps.meta.outputs.tags }}
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -61,7 +65,38 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: Notice
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to Azure CLI
+        if: "${{ secrets.AZURE_CREDENTIALS != '' }}"
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy Container App Revision
+        if: "${{ secrets.AZURE_CREDENTIALS != '' }}"
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+          RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP || 'fleetsense-rg' }}
+          APP_NAME: ${{ secrets.AZURE_APP_NAME || 'fleetsense-api' }}
         run: |
-          echo "Container image successfully published to ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}."
-          echo "Automated trigger for Azure Container Apps / AWS ECS deployment ready."
+          IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          echo "Deploying ${IMAGE_TAG} to Azure Container App ${APP_NAME} in ${RESOURCE_GROUP}..."
+          az containerapp update \
+            --name "${APP_NAME}" \
+            --resource-group "${RESOURCE_GROUP}" \
+            --image "${IMAGE_TAG}"
+
+      - name: Deployment Fallback Notice
+        if: "${{ secrets.AZURE_CREDENTIALS == '' }}"
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+        run: |
+          echo "================================================================="
+          echo "Container image built and published successfully to GHCR."
+          echo "To enable direct Azure Container Apps updates, set the following GitHub secret:"
+          echo "  AZURE_CREDENTIALS: Output of 'az ad sp create-for-rbac --sdk-auth'"
+          echo "================================================================="

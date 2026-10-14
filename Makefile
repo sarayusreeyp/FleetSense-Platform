@@ -1,4 +1,4 @@
-.PHONY: install test lint run-api run-etl run-train docker-up docker-down clean
+.PHONY: install test lint run-api run-etl run-train prefect-setup prefect-deploy prefect-worker docker-up docker-down clean
 
 install:
 	pip install --upgrade pip setuptools wheel
@@ -19,6 +19,18 @@ run-etl:
 
 run-train:
 	python -m fleetsense.workflows.train
+
+mlflow-ui:
+	mlflow ui --backend-store-uri sqlite:///metadata/mlflow.db --port 5000
+
+prefect-setup:
+	prefect work-pool create fleetsense-pool --type process || true
+
+prefect-deploy:
+	prefect deploy --all
+
+prefect-worker:
+	prefect worker start --pool fleetsense-pool
 
 docker-up:
 	docker-compose up --build -d

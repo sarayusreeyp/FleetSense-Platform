@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import os
+
 from fleetsense.core.config import settings
+from fleetsense.storage.azure_blob import AzureBlobStorage
 from fleetsense.storage.base import Storage
 from fleetsense.storage.local import LocalStorage
-from fleetsense.storage.azure_blob import AzureBlobStorage
 
 
 def get_storage(
@@ -54,6 +55,7 @@ def get_storage(
         )
         container = (
             azure_container_name
+            or os.getenv("AZURE_STORAGE_CONTAINER_NAME")
             or os.getenv("AZURE_CONTAINER_NAME")
             or settings.storage.azure_container_name
         )

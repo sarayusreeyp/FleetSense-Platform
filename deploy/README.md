@@ -27,6 +27,10 @@ To stop the services:
 docker-compose down
 ```
 
+### Production Notes for Container Services:
+- **MLflow Remote Artifacts**: In local dev, MLflow stores SQLite DB and local directory artifacts. In staging/production, configure `MLFLOW_TRACKING_URI` to a managed database (PostgreSQL) and `--default-artifact-root` to Azure Blob Storage (`azure://<container>/mlflow`) or AWS S3 (`s3://<bucket>/mlflow`).
+- **Prometheus Telemetry Authentication**: If `FLEETSENSE_METRICS_API_KEY` is set on the API service, configure `bearer_token` in `deploy/monitoring/prometheus.yml` so Prometheus can scrape `/metrics` with valid credentials.
+
 ---
 
 ## 2. Deploying to Microsoft Azure (Recommended)

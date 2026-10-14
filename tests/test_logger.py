@@ -1,4 +1,5 @@
 import logging
+
 from fleetsense.core.logger import get_logger
 from fleetsense.core.logger.config import LOG_FILE
 

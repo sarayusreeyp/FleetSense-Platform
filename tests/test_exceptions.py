@@ -1,4 +1,3 @@
-import pytest
 
 from fleetsense.core.exceptions import (
     APIConnectionError,

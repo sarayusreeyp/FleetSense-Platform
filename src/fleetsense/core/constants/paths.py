@@ -17,4 +17,5 @@ TMP_DATA_DIR = DATA_DIR / "tmp"
 
 # Artifacts & Logging
 ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
+MODELS_DIR = ARTIFACTS_DIR / "models"
 LOG_DIR = PROJECT_ROOT / "logs"

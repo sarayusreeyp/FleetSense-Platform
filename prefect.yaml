@@ -5,6 +5,10 @@ build: null
 push: null
 
 pull:
+  # For remote worker pools (Docker/Kubernetes/Cloud): clone repo and cd to root
+  # - prefect.deployments.steps.git_clone:
+  #     repository: "https://github.com/your-org/FleetSense-Platform.git"
+  #     branch: "main"
   - prefect.deployments.steps.set_working_directory:
       directory: .
 
@@ -14,6 +18,8 @@ deployments:
     schedules:
       - cron: "0 2 1 * *"
         timezone: "Asia/Kolkata"
+    parameters:
+      trigger_training: true
     work_pool:
       name: fleetsense-pool
 

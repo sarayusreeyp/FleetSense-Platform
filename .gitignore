@@ -52,6 +52,8 @@ htmlcov/
 # MLflow
 mlruns/
 mlflow.db
+metadata/*.db
+metadata/*.db-journal
 
 # Data & DVC cache
 data/raw/*
@@ -79,5 +81,6 @@ artifacts/models/*
 artifacts/metadata/*
 !artifacts/metadata/.gitkeep
 !artifacts/.gitkeep
+!artifacts/metrics.json
 *.pkl
 *.joblib

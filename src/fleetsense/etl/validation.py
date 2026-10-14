@@ -7,7 +7,6 @@ import pandas as pd
 
 from fleetsense.core.exceptions.data import (
     DataValidationError,
-    MissingColumnError,
 )
 
 REQUIRED_COLUMNS: set[str] = {
@@ -168,9 +167,9 @@ def clean_and_filter_tlc_dataframe(
     ).dt.total_seconds() / 60.0
     valid_duration = (duration_minutes >= 1.0) & (duration_minutes <= 1440.0)
 
-    # 3. Distance bounds (0.01 to 150 miles)
+    # 3. Distance bounds (0.01 to 100 miles, aligned with TRIP_DISTANCE_MAX)
     trip_dist = pd.to_numeric(df["trip_distance"], errors="coerce")
-    valid_distance = (trip_dist > 0.0) & (trip_dist <= 150.0)
+    valid_distance = (trip_dist > 0.0) & (trip_dist <= 100.0)
 
     # 4. Passenger count (1 to 9)
     pass_count = pd.to_numeric(df["passenger_count"], errors="coerce")
@@ -190,7 +189,10 @@ def clean_and_filter_tlc_dataframe(
         & valid_monetary
     )
 
-    cleaned_df = df[keep_mask].copy()
+    cleaned_df = df[keep_mask].sort_values(
+        by="tpep_pickup_datetime",
+        ascending=True,
+    ).reset_index(drop=True)
     cleaned_count = len(cleaned_df)
     dropped_count = initial_count - cleaned_count
     loss_pct = (dropped_count / initial_count) * 100.0 if initial_count > 0 else 0.0

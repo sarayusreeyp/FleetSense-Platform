@@ -53,8 +53,11 @@ COPY README.md /app/README.md
 RUN /opt/venv/bin/pip install --no-deps -e /app
 
 # Create persistent storage directories with appropriate permissions
-RUN mkdir -p /app/artifacts/models /app/artifacts/metadata /app/data /app/logs && \
-    chown -R appuser:fleetsense /app
+RUN mkdir -p /app/artifacts/models /app/artifacts/metadata /app/data /app/logs /tmp/prometheus_multiproc && \
+    chown -R appuser:fleetsense /app && \
+    chmod 777 /tmp/prometheus_multiproc
+
+ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc
 
 # Switch to unprivileged user
 USER appuser

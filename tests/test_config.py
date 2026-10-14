@@ -1,4 +1,5 @@
 from pathlib import Path
+
 import pytest
 
 from fleetsense.core.config import load_settings, settings

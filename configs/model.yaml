@@ -25,5 +25,20 @@ model:
   train_ratio: 0.70
   validation_ratio: 0.15
   test_ratio: 0.15
-  mlflow_tracking_uri: "sqlite:///mlflow.db"
+  mlflow_tracking_uri: "sqlite:///metadata/mlflow.db"
   mlflow_experiment_name: "fleetsense-trip-duration"
+
+  # ---------------------------------------------------------------------------
+  # Gap 14: Model Quality Gate thresholds
+  # A retrain is rejected (Prefect run fails) if validation metrics fall
+  # outside these bounds. Set to null to disable individual checks.
+  # ---------------------------------------------------------------------------
+  quality_gate:
+    max_val_mae: 8.0        # minutes; reject if validation MAE > 8 min
+    min_val_r2: 0.50        # reject if validation R² < 0.50
+
+  # ---------------------------------------------------------------------------
+  # Gap 24: Trip distance bounds (must match API schemas.py constants)
+  # ---------------------------------------------------------------------------
+  trip_distance_min: 0.0    # exclusive lower bound (miles)
+  trip_distance_max: 100.0  # inclusive upper bound (miles)

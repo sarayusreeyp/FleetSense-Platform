@@ -1,14 +1,12 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
 import pandas as pd
 import pytest
 
 from fleetsense.workflows.train import (
-    evaluate_model_task,
     load_features_task,
-    split_data_task,
     train_flow,
-    train_model_task,
 )
 
 
@@ -62,3 +60,5 @@ def test_train_flow_e2e(sample_feature_df):
     assert "validation" in result["metrics"]
     assert "test" in result["metrics"]
     assert Path(result["model_artifact"]).exists()
+    assert "latest_artifact" in result
+    assert Path(result["latest_artifact"]).exists()

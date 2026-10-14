@@ -4,7 +4,6 @@ import pandas as pd
 
 from fleetsense.core.exceptions.data import DataValidationError
 
-
 DEFAULT_TRAIN_RATIO: Final[float] = 0.70
 DEFAULT_VALIDATION_RATIO: Final[float] = 0.15
 DEFAULT_TEST_RATIO: Final[float] = 0.15

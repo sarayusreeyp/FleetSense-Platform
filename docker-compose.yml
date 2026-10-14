@@ -13,10 +13,15 @@ services:
       - FLEETSENSE_STORAGE_BACKEND=local
       - FLEETSENSE_STORAGE_LOCAL_ROOT=/app/data
       - FLEETSENSE_MODEL_ARTIFACT_PATH=/app/artifacts/models/latest_model.joblib
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_MODEL_NAME=trip_duration_regressor
+      - MLFLOW_MODEL_ALIAS=champion
     volumes:
       - ./data:/app/data
       - ./artifacts:/app/artifacts
       - ./logs:/app/logs
+    depends_on:
+      - mlflow
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -32,6 +37,7 @@ services:
       - "9090:9090"
     volumes:
       - ./deploy/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -48,6 +54,9 @@ services:
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./deploy/monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./deploy/monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
     depends_on:
       - prometheus
     restart: unless-stopped
@@ -57,9 +66,35 @@ services:
     container_name: fleetsense-mlflow
     ports:
       - "5000:5000"
-    command: mlflow server --backend-store-uri sqlite:////mlflow/mlflow.db --default-artifact-root /mlflow/artifacts --host 0.0.0.0 --port 5000
+    # In local development: SQLite backend store + local directory artifacts.
+    # In production: replace backend-store-uri with PostgreSQL and default-artifact-root with azure://<container>/mlflow or s3://<bucket>/mlflow.
+    command: mlflow server --backend-store-uri sqlite:////mlflow/mlflow.db --default-artifact-root /mlflow/artifacts --serve-artifacts --host 0.0.0.0 --port 5000
+    environment:
+      - AZURE_STORAGE_CONNECTION_STRING=${AZURE_STORAGE_CONNECTION_STRING:-}
     volumes:
       - ./artifacts/mlruns:/mlflow/artifacts
       - ./metadata:/mlflow
     restart: unless-stopped
 
+  prefect-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fleetsense-prefect-worker
+    environment:
+      - FLEETSENSE_APP_ENV=production
+      - FLEETSENSE_STORAGE_BACKEND=local
+      - FLEETSENSE_STORAGE_LOCAL_ROOT=/app/data
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - PREFECT_API_URL=${PREFECT_API_URL:-http://localhost:4200/api}
+      - PREFECT_API_KEY=${PREFECT_API_KEY:-}
+    volumes:
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
+      - ./logs:/app/logs
+      - ./configs:/app/configs
+    command: prefect worker start --pool fleetsense-pool --type process
+    depends_on:
+      - api
+      - mlflow
+    restart: unless-stopped

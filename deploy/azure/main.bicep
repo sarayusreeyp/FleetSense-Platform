@@ -18,7 +18,7 @@ var logAnalyticsName = '${prefix}-logs-${uniqueSuffix}'
 var envName = '${prefix}-env-${uniqueSuffix}'
 var appName = '${prefix}-api'
 
-// 1. Storage Account for TLC Datasets & DVC Remote
+// 1. Storage Account for TLC Datasets, Ingestion Metadata, Models & DVC Remote
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   name: storageAccountName
   location: location
@@ -29,6 +29,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   properties: {
     supportsHttpsTrafficOnly: true
     minimumTlsVersion: 'TLS1_2'
+    allowBlobPublicAccess: false
   }
 }
 
@@ -40,6 +41,11 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-01-01'
 resource rawContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-01-01' = {
   parent: blobService
   name: 'tlc-raw'
+}
+
+resource modelsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-01-01' = {
+  parent: blobService
+  name: 'fleetsense-data'
 }
 
 // 2. Azure Container Registry
@@ -81,6 +87,10 @@ resource containerEnv 'Microsoft.App/managedEnvironments@2023-05-01' = {
   }
 }
 
+// Construct Azure Storage Connection String securely
+var storageKey = storageAccount.listKeys().keys[0].value
+var storageConnString = 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageKey};EndpointSuffix=${environment().suffixes.storage}'
+
 // 5. Container App (FleetSense ML API)
 resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
   name: appName
@@ -97,6 +107,10 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
         {
           name: 'acr-password'
           value: acr.listCredentials().passwords[0].value
+        }
+        {
+          name: 'storage-connection-string'
+          value: storageConnString
         }
       ]
       registries: [
@@ -127,7 +141,11 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
             }
             {
               name: 'AZURE_STORAGE_CONTAINER_NAME'
-              value: 'tlc-raw'
+              value: 'fleetsense-data'
+            }
+            {
+              name: 'AZURE_STORAGE_CONNECTION_STRING'
+              secretRef: 'storage-connection-string'
             }
           ]
         }
@@ -153,3 +171,4 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
 output apiFqdn string = containerApp.properties.configuration.ingress.fqdn
 output storageAccountName string = storageAccount.name
 output acrLoginServer string = acr.properties.loginServer
+output storageContainerName string = modelsContainer.name

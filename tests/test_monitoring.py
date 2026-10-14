@@ -21,14 +21,14 @@ def client():
 def test_metric_helpers():
     """Verify that Prometheus tracking helper functions observe values correctly."""
     initial_count = PREDICTIONS_TOTAL.labels(model_version="test_v1", status="success")._value.get()
-    
+
     record_prediction(
         predicted_duration_minutes=15.5,
         trip_distance=4.2,
         model_version="test_v1",
         status="success",
     )
-    
+
     new_count = PREDICTIONS_TOTAL.labels(model_version="test_v1", status="success")._value.get()
     assert new_count == initial_count + 1
 
@@ -90,3 +90,20 @@ def test_metrics_updated_on_predict(client: TestClient):
     assert "fleetsense_predictions_total" in text
     assert "fleetsense_predicted_duration_minutes" in text
     assert "fleetsense_incoming_trip_distance_miles" in text
+
+
+def test_metrics_auth_bearer(client: TestClient, monkeypatch):
+    """Verify that /metrics enforces secret key via X-Metrics-API-Key or Bearer token."""
+    monkeypatch.setattr("fleetsense.api.main.METRICS_API_KEY", "secret-test-token")
+
+    # Missing auth
+    resp = client.get("/metrics")
+    assert resp.status_code == 403
+
+    # Header X-Metrics-API-Key
+    resp = client.get("/metrics", headers={"X-Metrics-API-Key": "secret-test-token"})
+    assert resp.status_code == 200
+
+    # Header Authorization: Bearer
+    resp = client.get("/metrics", headers={"Authorization": "Bearer secret-test-token"})
+    assert resp.status_code == 200

@@ -1,0 +1,47 @@
+groups:
+  - name: fleetsense_alerts
+    rules:
+      - alert: APIInstanceDown
+        expr: up{job="fleetsense-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "FleetSense API instance is down"
+          description: "Prometheus cannot scrape the FleetSense API container for over 1 minute."
+
+      - alert: ModelUnloaded
+        expr: fleetsense_model_loaded == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "FleetSense model is unloaded"
+          description: "The ML model is currently not loaded on the inference API service."
+
+      - alert: HighDataDriftDetected
+        expr: sum(fleetsense_drift_alerts_total{severity="HIGH"} or vector(0)) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High data drift detected on incoming trips"
+          description: "Population Stability Index (PSI) exceeded threshold (0.20). Model retraining is recommended."
+
+      - alert: HighAPIErrorRate
+        expr: sum(rate(fleetsense_http_requests_total{status=~"5.."}[5m])) / sum(rate(fleetsense_http_requests_total[5m])) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High HTTP 5xx error rate"
+          description: "Over 5% of API requests returned server errors in the last 5 minutes."
+
+      - alert: HighP95Latency
+        expr: histogram_quantile(0.95, sum(rate(fleetsense_http_request_duration_seconds_bucket[5m])) by (le)) > 2.0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API P95 latency exceeds 2 seconds"
+          description: "P95 request duration is above 2 seconds over the past 5 minutes."

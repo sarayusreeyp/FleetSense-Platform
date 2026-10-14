@@ -1,0 +1,135 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "API Telemetry & Throughput",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "reqps" }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1 },
+      "id": 2,
+      "title": "HTTP Request Rate by Endpoint",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(fleetsense_http_requests_total[1m])) by (endpoint, status)",
+          "legendFormat": "{{endpoint}} ({{status}})"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "s" }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1 },
+      "id": 3,
+      "title": "p95 Latency by Endpoint",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(fleetsense_http_request_duration_seconds_bucket[5m])) by (le, endpoint))",
+          "legendFormat": "{{endpoint}} (p95)"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 8 },
+      "id": 4,
+      "title": "ML Model Performance & Drift",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "options": { "0": { "color": "red", "text": "Unloaded" }, "1": { "color": "green", "text": "Loaded" } }, "type": "value" }
+          ]
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 9 },
+      "id": 5,
+      "title": "Model Health Status",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "fleetsense_model_loaded",
+          "legendFormat": "Loaded Status"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "ops" }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 9 },
+      "id": 6,
+      "title": "Prediction Throughput",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(fleetsense_predictions_total[1m])) by (model_version, status)",
+          "legendFormat": "{{model_version}} ({{status}})"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 9 },
+      "id": 7,
+      "title": "Data Drift Alerts",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(fleetsense_drift_alerts_total) by (severity) or vector(0)",
+          "legendFormat": "{{severity}}"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "m" }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 9 },
+      "id": 8,
+      "title": "Predicted Duration (p50 / p90)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(fleetsense_predicted_duration_minutes_bucket[5m])) by (le))",
+          "legendFormat": "p50 (median)"
+        },
+        {
+          "expr": "histogram_quantile(0.90, sum(rate(fleetsense_predicted_duration_minutes_bucket[5m])) by (le))",
+          "legendFormat": "p90"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["fleetsense", "mlops", "fastapi"],
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "FleetSense Platform Telemetry",
+  "uid": "fleetsense-main-dashboard",
+  "version": 1
+}

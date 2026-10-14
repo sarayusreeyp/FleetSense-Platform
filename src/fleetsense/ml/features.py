@@ -4,7 +4,6 @@ import pandas as pd
 
 from fleetsense.core.exceptions.data import DataValidationError
 
-
 TARGET_COLUMN: Final[str] = "trip_duration_minutes"
 
 REQUIRED_COLUMNS: Final[set[str]] = {

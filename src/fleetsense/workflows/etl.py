@@ -105,9 +105,26 @@ def etl_flow(
     year: int | None = None,
     months: list[int] | None = None,
     run_features: bool = True,
+    reprocess_existing: bool = False,
+    trigger_training: bool = False,
 ) -> dict[str, Any]:
     """
     FleetSense end-to-end ETL flow.
+
+    Parameters
+    ----------
+    dataset:
+        Taxi dataset type ('yellow', 'green', etc.)
+    year:
+        Specific year to ingest.
+    months:
+        Specific list of months to ingest.
+    run_features:
+        Whether to generate feature matrices after cleaning.
+    reprocess_existing:
+        When True, processes any existing raw files in storage if no new downloads occurred.
+    trigger_training:
+        When True, automatically triggers train_flow upon successful feature engineering.
     """
     logger.info("Starting FleetSense ETL workflow...")
     ingested_files = ingestion_task(
@@ -116,15 +133,37 @@ def etl_flow(
         months=months,
     )
 
-    if not ingested_files:
-        logger.info("No new files to ingest.")
+    files_to_clean: list[Path | str] = list(ingested_files)
+
+    # If no newly ingested files, allow reprocessing existing raw files from storage
+    if not files_to_clean:
+        storage = get_storage()
+        raw_files = sorted(storage.list_files("raw"))
+        matching_raw = [
+            f for f in raw_files
+            if f.startswith(f"{dataset}_tripdata_") and f.endswith(".parquet")
+        ]
+        feature_files = storage.list_files("features")
+        should_reprocess = reprocess_existing or (matching_raw and not feature_files)
+
+        if should_reprocess and matching_raw:
+            logger.info(
+                "Processing %d existing raw file(s) from storage: %s",
+                len(matching_raw),
+                matching_raw,
+            )
+            files_to_clean = matching_raw
+
+    if not files_to_clean:
+        logger.info("No files to ingest or process.")
         return {
-            "ingested": [],
+            "ingested": [str(f) for f in ingested_files],
             "processed": [],
             "features": [],
+            "training_triggered": False,
         }
 
-    processed_results = cleaning_task(raw_files=ingested_files)
+    processed_results = cleaning_task(raw_files=files_to_clean)
 
     feature_results = []
     if run_features:
@@ -132,11 +171,20 @@ def etl_flow(
             processed_items=processed_results
         )
 
+    # Event-driven training trigger
+    training_triggered = False
+    if trigger_training and feature_results:
+        logger.info("trigger_training=True: Automatically triggering train_flow...")
+        from fleetsense.workflows.train import train_flow
+        train_flow()
+        training_triggered = True
+
     logger.info("ETL workflow completed successfully.")
     return {
         "ingested": [str(f) for f in ingested_files],
         "processed": processed_results,
         "features": feature_results,
+        "training_triggered": training_triggered,
     }
 
 

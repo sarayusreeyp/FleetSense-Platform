@@ -3,13 +3,11 @@ from __future__ import annotations
 import io
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pandas as pd
 
 try:
     from azure.core.exceptions import (
-        HttpResponseError,
         ResourceExistsError,
         ResourceNotFoundError,
     )
@@ -49,6 +47,7 @@ class AzureBlobStorage(Storage):
         )
         self.container_name = (
             container_name
+            or os.getenv("AZURE_STORAGE_CONTAINER_NAME")
             or os.getenv("AZURE_CONTAINER_NAME")
             or "fleetsense-data"
         )

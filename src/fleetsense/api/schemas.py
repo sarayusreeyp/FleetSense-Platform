@@ -1,7 +1,17 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
+
 from pydantic import BaseModel, Field
+
+# ---------------------------------------------------------------------------
+# Trip distance bounds — SINGLE SOURCE OF TRUTH
+# Must match training-side filter in ingestion/validation pipeline:
+#   - gt=0.0  (no zero-distance trips)
+#   - le=100.0 (TLC data quality cap; >100 miles is almost certainly bad GPS data)
+# ---------------------------------------------------------------------------
+TRIP_DISTANCE_MIN: float = 0.0       # exclusive
+TRIP_DISTANCE_MAX: float = 100.0     # inclusive
 
 
 class TripFeaturesPayload(BaseModel):
@@ -28,9 +38,9 @@ class TripFeaturesPayload(BaseModel):
     )
     trip_distance: float = Field(
         ...,
-        gt=0.0,
-        le=500.0,
-        description="Trip distance in miles",
+        gt=TRIP_DISTANCE_MIN,
+        le=TRIP_DISTANCE_MAX,
+        description=f"Trip distance in miles (must be > {TRIP_DISTANCE_MIN} and <= {TRIP_DISTANCE_MAX})",
         examples=[3.5],
     )
     PULocationID: int = Field(
@@ -68,6 +78,10 @@ class PredictionResponse(BaseModel):
         default="HistGradientBoostingRegressor",
         description="Algorithm used for prediction",
     )
+    model_source: str = Field(
+        default="unknown",
+        description="Where the model was loaded from (local path, azure blob, or dummy)",
+    )
 
 
 class BatchPredictionRequest(BaseModel):
@@ -96,3 +110,11 @@ class HealthResponse(BaseModel):
     version: str
     model_loaded: bool
     model_algorithm: str | None = None
+    model_source: str | None = Field(
+        default=None,
+        description="Where the active model was loaded from",
+    )
+    is_dummy_model: bool = Field(
+        default=False,
+        description="True if a dummy baseline is running (not a real trained artifact)",
+    )

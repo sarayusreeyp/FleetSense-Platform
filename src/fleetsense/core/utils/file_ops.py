@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Iterable, Mapping, Any
+from typing import Any, Iterable, Mapping
 
 
 def ensure_parent_dir(path: Path) -> Path:

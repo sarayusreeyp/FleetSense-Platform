@@ -3,9 +3,12 @@ stages:
     cmd: python -m fleetsense.workflows.etl
     deps:
       - configs/config.yaml
+      - data/raw
       - src/fleetsense/etl
       - src/fleetsense/workflows/etl.py
     outs:
+      - data/processed:
+          persist: true
       - data/features:
           persist: true
 
@@ -19,3 +22,6 @@ stages:
     outs:
       - artifacts/models:
           persist: true
+    metrics:
+      - artifacts/metrics.json:
+          cache: false

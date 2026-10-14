@@ -2,7 +2,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-import pytest
 
 from fleetsense.etl.ingestion import (
     clean_and_process_dataset,
@@ -56,11 +55,10 @@ def test_run_ingestion_skips_downloaded_file():
         "fleetsense.etl.ingestion.IngestionMetadata"
     ) as mock_metadata, patch(
         "fleetsense.etl.ingestion.get_storage"
-    ) as mock_get_storage:
+    ):
 
         metadata = mock_metadata.return_value
         downloader = mock_downloader.return_value
-        storage = mock_get_storage.return_value
 
         metadata.is_downloaded.return_value = True
 

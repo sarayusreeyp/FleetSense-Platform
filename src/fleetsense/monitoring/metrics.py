@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import time
+import os
 from typing import Sequence
 
 from prometheus_client import (
@@ -91,4 +91,11 @@ def set_model_status(loaded: bool, model_name: str = "HistGradientBoostingRegres
 
 def get_latest_metrics() -> tuple[bytes, str]:
     """Return latest Prometheus metrics text and corresponding media type."""
+    multiproc_dir = os.getenv("PROMETHEUS_MULTIPROC_DIR")
+    if multiproc_dir and os.path.isdir(multiproc_dir):
+        from prometheus_client import CollectorRegistry, multiprocess
+
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
+        return generate_latest(registry), CONTENT_TYPE_LATEST
     return generate_latest(), CONTENT_TYPE_LATEST

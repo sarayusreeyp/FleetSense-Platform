@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -40,6 +41,19 @@ class IngestionConfig(BaseModel):
     start_month: int = 1
 
 
+class QualityGateConfig(BaseModel):
+    """Gap 14: Model promotion thresholds loaded from model.yaml."""
+
+    max_val_mae: Optional[float] = Field(
+        default=8.0,
+        description="Maximum allowed validation MAE (minutes). None = disabled.",
+    )
+    min_val_r2: Optional[float] = Field(
+        default=0.50,
+        description="Minimum required validation R². None = disabled.",
+    )
+
+
 class ModelConfig(BaseModel):
     name: str = "trip_duration_regressor"
     algorithm: str = "HistGradientBoostingRegressor"
@@ -73,8 +87,25 @@ class ModelConfig(BaseModel):
     train_ratio: float = 0.70
     validation_ratio: float = 0.15
     test_ratio: float = 0.15
-    mlflow_tracking_uri: str = "sqlite:///mlflow.db"
+    mlflow_tracking_uri: str = "sqlite:///metadata/mlflow.db"
     mlflow_experiment_name: str = "fleetsense-trip-duration"
+
+    # Gap 14: Quality gate thresholds — read from model.yaml quality_gate section
+    quality_gate: QualityGateConfig = Field(default_factory=QualityGateConfig)
+
+    # Gap 24: Trip distance validation bounds (mirrors schemas.py TRIP_DISTANCE_MAX)
+    trip_distance_min: float = 0.0
+    trip_distance_max: float = 100.0
+
+    @property
+    def quality_gate_max_mae(self) -> float | None:
+        """Convenience accessor for the quality gate MAE threshold."""
+        return self.quality_gate.max_val_mae
+
+    @property
+    def quality_gate_min_r2(self) -> float | None:
+        """Convenience accessor for the quality gate R² threshold."""
+        return self.quality_gate.min_val_r2
 
 
 class Settings(BaseModel):
