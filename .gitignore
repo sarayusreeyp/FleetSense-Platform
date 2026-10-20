@@ -81,3 +81,7 @@ artifacts/metadata/*
 !artifacts/metrics.json
 *.pkl
 *.joblib
+
+# Notebooks
+notebooks/
+notebooks/*
