@@ -112,13 +112,13 @@ class PredictionService:
             active_storage = get_storage()
             remote_model_filename = os.getenv("FLEETSENSE_REMOTE_MODEL_FILENAME", "trip_duration_model.joblib")
             remote_category = os.getenv("FLEETSENSE_REMOTE_MODEL_CATEGORY", "models/champion")
-            
+
             # Check if this remote model exists in storage
             if hasattr(active_storage, "download_to_file") and active_storage.exists(f"{remote_category}/{remote_model_filename}"):
                 cache_dir = MODELS_DIR / "cache"
                 cache_dir.mkdir(parents=True, exist_ok=True)
                 local_cache_path = cache_dir / remote_model_filename
-                
+
                 logger.info(
                     "Downloading champion model from %s/%s to local cache %s...",
                     remote_category,
