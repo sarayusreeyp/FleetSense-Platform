@@ -185,27 +185,36 @@ def clean_and_process_dataset(
         Stored processed path/URI and data quality audit report.
     """
     active_storage = storage or get_storage()
+    metadata = IngestionMetadata()
 
     logger.info("Loading raw dataset %s for cleaning...", filename)
-    raw_df = active_storage.load_dataframe(category="raw", filename=filename)
+    try:
+        raw_df = active_storage.load_dataframe(category="raw", filename=filename)
 
-    cleaned_df, report = clean_and_filter_tlc_dataframe(
-        raw_df, max_allowed_loss_pct=max_allowed_loss_pct
-    )
+        cleaned_df, report = clean_and_filter_tlc_dataframe(
+            raw_df, max_allowed_loss_pct=max_allowed_loss_pct
+        )
 
-    stored_path = active_storage.save_dataframe(
-        dataframe=cleaned_df,
-        category="processed",
-        filename=filename,
-    )
+        stored_path = active_storage.save_dataframe(
+            dataframe=cleaned_df,
+            category="processed",
+            filename=filename,
+        )
 
-    logger.info(
-        "Successfully processed %s. Rows kept: %d / %d (%.2f%% loss). Stored at: %s",
-        filename,
-        report["cleaned_rows"],
-        report["initial_rows"],
-        report["loss_percentage"],
-        stored_path,
-    )
+        # Gap 2: Record successful processing in metadata state
+        dataset_name = filename.split("_")[0] if "_" in filename else "yellow"
+        metadata.mark_processed(filename=filename, dataset=dataset_name, report=report)
 
-    return stored_path, report
+        logger.info(
+            "Successfully processed %s. Rows kept: %d / %d (%.2f%% loss). Stored at: %s",
+            filename,
+            report["cleaned_rows"],
+            report["initial_rows"],
+            report["loss_percentage"],
+            stored_path,
+        )
+        return stored_path, report
+    except Exception as exc:
+        dataset_name = filename.split("_")[0] if "_" in filename else "yellow"
+        metadata.mark_failed(filename=filename, dataset=dataset_name, error=str(exc))
+        raise

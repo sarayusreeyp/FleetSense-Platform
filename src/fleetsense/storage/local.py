@@ -107,16 +107,17 @@ class LocalStorage(Storage):
         self,
         category: str,
         filename: str,
+        columns: list[str] | None = None,
     ) -> pd.DataFrame:
         """
-        Load a stored Parquet file into a pandas DataFrame.
+        Load a stored Parquet file into a pandas DataFrame with optional column projection.
         """
         target_path = self._get_category_dir(category) / Path(filename).name
         if not target_path.exists():
             raise StorageFileNotFoundError(
                 message=f"Parquet file not found in storage: {target_path}"
             )
-        return pd.read_parquet(target_path)
+        return pd.read_parquet(target_path, columns=columns)
 
     def download_to_file(
         self,
@@ -146,7 +147,7 @@ class LocalStorage(Storage):
         return [
             entry.name
             for entry in category_dir.iterdir()
-            if entry.is_file() and not entry.name.endswith(".tmp")
+            if entry.is_file() and not entry.name.startswith(".") and not entry.name.endswith(".tmp")
         ]
 
     def delete(self, category: str, filename: str) -> bool:
@@ -158,6 +159,21 @@ class LocalStorage(Storage):
             target_path.unlink()
             return True
         return False
+
+    def clean_temp_files(self, category: str) -> int:
+        """
+        Clean up orphaned temporary (.tmp) files in a given local storage category.
+        """
+        category_dir = self._get_category_dir(category)
+        removed_count = 0
+        for entry in category_dir.iterdir():
+            if entry.is_file() and entry.name.endswith(".tmp"):
+                try:
+                    entry.unlink()
+                    removed_count += 1
+                except OSError:
+                    pass
+        return removed_count
 
     # --- Backward compatibility methods ---
 

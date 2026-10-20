@@ -18,3 +18,36 @@ def test_logger_writes_to_file():
     assert LOG_FILE.exists()
     content = LOG_FILE.read_text(encoding="utf-8")
     assert test_msg in content
+
+
+def test_logger_json_formatting_option(monkeypatch):
+    """Verify LOGGING_CONFIG uses json formatter when LOG_FORMAT=json."""
+    import importlib
+    monkeypatch.setenv("LOG_FORMAT", "json")
+    import fleetsense.core.logger.config as log_cfg
+    importlib.reload(log_cfg)
+
+    assert log_cfg.LOGGING_CONFIG["handlers"]["console"]["formatter"] == "json"
+
+    # Reset
+    monkeypatch.delenv("LOG_FORMAT", raising=False)
+    importlib.reload(log_cfg)
+
+
+def test_logger_non_writable_directory_fallback(tmp_path, monkeypatch):
+    """Verify that if log file cannot be created, file handler is omitted without crashing."""
+    import importlib
+    from unittest.mock import patch
+
+    # Mock open on log file to simulate PermissionError
+    with patch("pathlib.Path.open", side_effect=PermissionError("Read-only filesystem")):
+        import fleetsense.core.logger.config as log_cfg
+        importlib.reload(log_cfg)
+
+        assert "file" not in log_cfg.LOGGING_CONFIG["root"]["handlers"]
+        assert "console" in log_cfg.LOGGING_CONFIG["root"]["handlers"]
+
+    # Reload cleanly
+    import fleetsense.core.logger.config as log_cfg
+    importlib.reload(log_cfg)
+

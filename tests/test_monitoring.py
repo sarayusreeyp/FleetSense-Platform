@@ -107,3 +107,36 @@ def test_metrics_auth_bearer(client: TestClient, monkeypatch):
     # Header Authorization: Bearer
     resp = client.get("/metrics", headers={"Authorization": "Bearer secret-test-token"})
     assert resp.status_code == 200
+
+
+def test_prediction_drift_and_configurable_thresholds(monkeypatch):
+    """Verify that prediction drift is evaluated and configurable thresholds take effect."""
+    import collections
+    from unittest.mock import patch
+
+    from fleetsense.monitoring import drift
+
+    orig_dist = drift._distance_window
+    orig_dur = drift._duration_window
+    orig_counter = drift._sample_counter
+
+    try:
+        drift._distance_window = collections.deque(maxlen=500)
+        drift._duration_window = collections.deque(maxlen=500)
+        drift._sample_counter = 0
+
+        # Fill with 100 samples
+        for _ in range(99):
+            drift._distance_window.append(2.0)
+            drift._duration_window.append(12.0)
+            drift._sample_counter += 1
+
+        with patch("fleetsense.monitoring.drift._compute_psi", return_value=0.25) as mock_psi:
+            # 100th sample triggers drift evaluation for both distance and duration
+            drift.check_and_alert_drift(trip_distance=2.0, predicted_duration_minutes=12.0)
+            assert mock_psi.call_count == 2
+    finally:
+        drift._distance_window = orig_dist
+        drift._duration_window = orig_dur
+        drift._sample_counter = orig_counter
+

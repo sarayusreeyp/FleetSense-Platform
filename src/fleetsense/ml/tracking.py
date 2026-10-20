@@ -27,15 +27,15 @@ def _resolve_tracking_uri() -> str:
     Priority:
       1. MLFLOW_TRACKING_URI env var  (e.g., http://mlflow:5000 or postgresql://)
       2. settings.model.mlflow_tracking_uri from model.yaml
-      3. Fallback to local SQLite (development only)
+      3. Fallback to PostgreSQL default
     """
     uri = (
         os.getenv("MLFLOW_TRACKING_URI")
         or settings.model.mlflow_tracking_uri
-        or "sqlite:///metadata/mlflow.db"
+        or "postgresql://mlflow:mlflow@localhost:5432/mlflow"
     )
 
-    # Resolve relative SQLite URIs against PROJECT_ROOT to ensure single source of truth
+    # Resolve relative SQLite URIs against PROJECT_ROOT if SQLite is explicitly provided
     if uri.startswith("sqlite:///") and not uri.startswith("sqlite:////"):
         rel_part = uri[len("sqlite:///"):]
         if not (len(rel_part) > 2 and rel_part[1] == ":") and not rel_part.startswith("/"):
@@ -43,13 +43,14 @@ def _resolve_tracking_uri() -> str:
             abs_db.parent.mkdir(parents=True, exist_ok=True)
             uri = f"sqlite:///{abs_db.as_posix()}"
 
-    env = settings.app.environment
-    if uri.startswith("sqlite://") and env in ("production", "staging"):
-        logger.warning(
-            "MLflow is using a LOCAL SQLite database (%s) in '%s' environment. "
-            "Set MLFLOW_TRACKING_URI to your remote MLflow server.",
-            uri,
-            env,
+    env = os.getenv("ENVIRONMENT") or settings.app.environment
+    allow_sqlite = os.getenv("ALLOW_SQLITE_TRACKING", "false").lower() in ("true", "1")
+    if uri.startswith("sqlite://") and env in ("production", "staging") and not allow_sqlite:
+        raise ValueError(
+            f"MLflow cannot use a local SQLite database ({uri}) in '{env}' environment. "
+            f"Set MLFLOW_TRACKING_URI to your remote MLflow server "
+            f"(e.g. http://mlflow:5000 or postgresql://...) or set "
+            f"ALLOW_SQLITE_TRACKING=true to permit direct file-based tracking."
         )
 
     return uri
@@ -146,7 +147,7 @@ class MLflowTracker:
         challenger_metric: float | None = None,
         metric_name: str = "val_mae",
         higher_is_better: bool = False,
-        tolerance: float = 0.05,
+        tolerance: float = 0.0,
     ) -> Any:
         """
         Log scikit-learn model to MLflow and register it in the MLflow Model Registry.
@@ -178,9 +179,16 @@ class MLflowTracker:
                         if hasattr(model_info, "registered_model_version") and model_info.registered_model_version:
                             version_to_alias = str(model_info.registered_model_version)
                         else:
-                            latest_versions = client.get_latest_versions(reg_name)
-                            if latest_versions:
-                                version_to_alias = str(latest_versions[0].version)
+                            try:
+                                versions = client.search_model_versions(f"name='{reg_name}'")
+                                if versions:
+                                    # Sort descending by creation timestamp / version
+                                    sorted_versions = sorted(versions, key=lambda v: int(v.version), reverse=True)
+                                    version_to_alias = str(sorted_versions[0].version)
+                            except Exception:
+                                latest_versions = client.get_latest_versions(reg_name)
+                                if latest_versions:
+                                    version_to_alias = str(latest_versions[0].version)
 
                         if version_to_alias:
                             target_alias = alias
@@ -192,9 +200,11 @@ class MLflowTracker:
 
                                     if champ_metric is not None:
                                         if higher_is_better:
-                                            beats_champ = challenger_metric >= champ_metric * (1.0 - tolerance)
+                                            # Challenger must beat or match champion
+                                            beats_champ = challenger_metric >= champ_metric * (1.0 + tolerance)
                                         else:
-                                            beats_champ = challenger_metric <= champ_metric * (1.0 + tolerance)
+                                            # Lower is better (e.g. MAE): challenger must be <= champion
+                                            beats_champ = challenger_metric <= champ_metric * (1.0 - tolerance)
 
                                         if beats_champ:
                                             logger.info(

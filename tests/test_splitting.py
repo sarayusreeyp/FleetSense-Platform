@@ -130,3 +130,31 @@ def test_empty_features_fail():
             features,
             target,
         )
+
+
+def test_split_dataset_by_date():
+    from fleetsense.ml.splitting import split_dataset_by_date
+
+    features = pd.DataFrame({"feat": range(10)})
+    target = pd.Series(range(10))
+    dates = pd.date_range("2026-01-01", periods=10, freq="ME")  # monthly ends: Jan to Oct
+
+    result = split_dataset_by_date(
+        features=features,
+        target=target,
+        date_column=dates,
+        val_cutoff="2026-07-01",
+        test_cutoff="2026-09-01",
+    )
+
+    X_train, y_train = result["train"]
+    X_val, y_val = result["validation"]
+    X_test, y_test = result["test"]
+
+    # Jan to Jun = 6 months
+    assert len(X_train) == 6
+    # Jul to Aug = 2 months
+    assert len(X_val) == 2
+    # Sep to Oct = 2 months
+    assert len(X_test) == 2
+    assert len(X_train) + len(X_val) + len(X_test) == 10

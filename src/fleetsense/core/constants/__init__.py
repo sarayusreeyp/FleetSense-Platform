@@ -5,6 +5,7 @@ from .paths import (
     FEATURES_DATA_DIR,
     LOG_DIR,
     METADATA_DIR,
+    MODELS_DIR,
     PROCESSED_DATA_DIR,
     PROJECT_ROOT,
     RAW_DATA_DIR,
@@ -19,9 +20,11 @@ __all__ = [
     "FEATURES_DATA_DIR",
     "LOG_DIR",
     "METADATA_DIR",
+    "MODELS_DIR",
     "PROCESSED_DATA_DIR",
     "PROJECT_ROOT",
     "RAW_DATA_DIR",
     "TLC_RAW_DIR",
     "TMP_DATA_DIR",
 ]
+

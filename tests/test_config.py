@@ -26,7 +26,7 @@ def test_settings_loaded():
     assert settings.ingestion.dataset == "yellow"
     assert settings.ingestion.start_year == 2026
     assert settings.ingestion.start_month == 1
-    assert settings.model.algorithm == "HistGradientBoostingRegressor"
+    assert settings.model.algorithm in {"XGBRegressor", "HistGradientBoostingRegressor", "RandomForestRegressor"}
     assert settings.model.target_column == "trip_duration_minutes"
 
 

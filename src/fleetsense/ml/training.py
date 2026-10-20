@@ -70,6 +70,20 @@ def train_model(
                 random_state=random_state,
                 n_jobs=DEFAULT_N_JOBS,
             )
+        elif algorithm == "XGBRegressor":
+            from xgboost import XGBRegressor
+
+            # XGBoost max_depth defaults to 6 if not provided
+            xgb_depth = max_depth if max_depth is not None else 6
+            model = XGBRegressor(
+                n_estimators=n_estimators,
+                learning_rate=learning_rate,
+                max_depth=xgb_depth,
+                random_state=random_state,
+                n_jobs=DEFAULT_N_JOBS,
+                tree_method="hist",
+                enable_categorical=True,
+            )
         else:
             raise ValueError(f"Unsupported regression algorithm: '{algorithm}'")
 

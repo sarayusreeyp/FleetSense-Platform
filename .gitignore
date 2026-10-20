@@ -55,7 +55,7 @@ mlflow.db
 metadata/*.db
 metadata/*.db-journal
 
-# Data & DVC cache
+# Data cache
 data/raw/*
 !data/raw/.gitkeep
 data/processed/*
@@ -64,9 +64,6 @@ data/features/*
 !data/features/.gitkeep
 data/tmp/*
 !data/tmp/.gitkeep
-data/dvc_remote/
-.dvc/cache/
-.dvc/tmp/
 
 # Metadata runtime state
 metadata/*.json

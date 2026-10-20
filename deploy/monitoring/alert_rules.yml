@@ -20,7 +20,7 @@ groups:
           description: "The ML model is currently not loaded on the inference API service."
 
       - alert: HighDataDriftDetected
-        expr: sum(fleetsense_drift_alerts_total{severity="HIGH"} or vector(0)) > 0
+        expr: sum(increase(fleetsense_drift_alerts_total{severity="HIGH"}[10m])) > 0
         for: 1m
         labels:
           severity: warning

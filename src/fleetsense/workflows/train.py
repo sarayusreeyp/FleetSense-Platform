@@ -23,15 +23,15 @@ logger = get_logger(__name__)
 def load_features_task(
     filename: str | None = None,
     use_all_months: bool = True,
-) -> tuple[Any, Any, str]:
-    """Load feature matrices from storage.
+    max_history_months: int = 18,
+) -> tuple[Any, Any, str, Any]:
+    """Load feature matrices from storage using a rolling window and column projection.
 
-    Gap 1 fix: when ``use_all_months=True`` (the default), ALL available feature
-    files are concatenated into a single training dataset instead of only the most
-    recent one.  Pass ``filename`` to pin to a specific file.
+    - When ``use_all_months=True``, selects up to the most recent ``max_history_months`` (default 18).
+    - Only reads required feature and target columns via PyArrow projection to conserve RAM.
     """
     storage = get_storage()
-    available = sorted(storage.list_files("features"))
+    available = sorted([f for f in storage.list_files("features") if f.endswith(".parquet")])
 
     if not available:
         raise FileNotFoundError(
@@ -39,33 +39,53 @@ def load_features_task(
         )
 
     if filename:
-        # Explicit single-file mode
         target_files = [filename]
         logger.info("Loading single feature dataset: %s", filename)
     elif use_all_months:
-        target_files = available
+        # Rolling 18-month window: take the most recent max_history_months
+        target_files = available[-max_history_months:]
         logger.info(
-            "Loading ALL %d feature file(s) for multi-month training: %s",
+            "Loading rolling %d-month window (%d file(s) of %d available): %s",
+            max_history_months,
             len(target_files),
+            len(available),
             target_files,
         )
     else:
-        # Legacy behaviour: latest file only
         target_files = [available[-1]]
         logger.info("Loading latest feature dataset: %s", target_files[0])
 
+    # Memory Safety: project only required columns
+    needed_columns = list(
+        set(
+            settings.model.features
+            + [TARGET_COLUMN, "pickup_datetime", "tpep_pickup_datetime"]
+        )
+    )
+
     frames: list[pd.DataFrame] = []
     for fname in target_files:
-        df = storage.load_dataframe(category="features", filename=fname)
+        df = storage.load_dataframe(category="features", filename=fname, columns=needed_columns)
         if TARGET_COLUMN not in df.columns:
             raise ValueError(f"Target column '{TARGET_COLUMN}' missing from {fname}.")
         frames.append(df)
-        logger.info("Loaded %d rows from %s", len(df), fname)
+        logger.info("Loaded %d rows from %s (projected columns: %d)", len(df), fname, len(df.columns))
 
     combined = pd.concat(frames, ignore_index=True)
     logger.info(
         "Combined dataset: %d rows from %d file(s).", len(combined), len(frames)
     )
+
+    # Ensure strictly chronological ordering across files before train/val/test splitting
+    date_series = None
+    if "pickup_datetime" in combined.columns:
+        combined = combined.sort_values(by="pickup_datetime").reset_index(drop=True)
+        date_series = combined["pickup_datetime"].copy()
+        combined = combined.drop(columns=["pickup_datetime"])
+    elif "tpep_pickup_datetime" in combined.columns:
+        combined = combined.sort_values(by="tpep_pickup_datetime").reset_index(drop=True)
+        date_series = combined["tpep_pickup_datetime"].copy()
+        combined = combined.drop(columns=["tpep_pickup_datetime"])
 
     if filename:
         dataset_label = filename
@@ -76,15 +96,34 @@ def load_features_task(
 
     X = combined.drop(columns=[TARGET_COLUMN])
     y = combined[TARGET_COLUMN]
-    return X, y, dataset_label
+    return X, y, dataset_label, date_series
 
 
 @task(name="split-dataset")
 def split_data_task(
     X: Any,
     y: Any,
+    date_series: Any = None,
+    val_cutoff: str | None = None,
+    test_cutoff: str | None = None,
 ) -> dict[str, tuple[Any, Any]]:
-    """Chronologically split features and target."""
+    """Chronologically split features and target by calendar cutoff or ratio."""
+    if val_cutoff is not None and test_cutoff is not None and date_series is not None:
+        from fleetsense.ml.splitting import split_dataset_by_date
+
+        logger.info(
+            "Splitting dataset by calendar cutoffs: val_cutoff=%s, test_cutoff=%s",
+            val_cutoff,
+            test_cutoff,
+        )
+        return split_dataset_by_date(
+            features=X,
+            target=y,
+            date_column=date_series,
+            val_cutoff=val_cutoff,
+            test_cutoff=test_cutoff,
+        )
+
     return split_dataset(
         features=X,
         target=y,
@@ -189,11 +228,11 @@ def persist_and_track_task(
     algorithm: str,
     sample_X: Any = None,
     sample_y: Any = None,
+    full_X: Any = None,
+    X_val: Any = None,
+    y_val: Any = None,
 ) -> dict[str, Any]:
-    """Persist model artifact and log experiment metadata.
-
-    Saves model into artifacts/models/ (tracked by DVC) and logs signature/alias to MLflow.
-    """
+    """Persist model artifact and log experiment metadata to MLflow."""
     tracker = MLflowTracker()
     tracker.start_run(run_name=f"train_{algorithm}_{dataset_name}")
 
@@ -214,21 +253,20 @@ def persist_and_track_task(
     )
     tracker.log_metrics(flat_metrics)
 
-    # Gap 18: Log feature importance if the model exposes it
-    _log_feature_importance(tracker, model)
+    # Log feature importance (tree-based or permutation importance)
+    _log_feature_importance(tracker, model, X_val=X_val, y_val=y_val)
 
-    # Save model into artifacts/models/ for DVC and container deployment
+    # 1. Primary Model Registry & Artifact Logging via MLflow
+    # MLflow manages the authoritative artifact repository (local sqlite or remote blob/S3).
+    # Maintain MODELS_DIR/latest_model.joblib for offline fallback.
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     model_name = f"{settings.model.name}_{algorithm}.joblib"
     local_model_path = MODELS_DIR / model_name
     save_model(model, local_model_path)
     tracker.log_artifact(local_model_path)
 
-    # Also save latest_model.joblib pointer and backward-compatible root artifact
     latest_model_path = MODELS_DIR / "latest_model.joblib"
     save_model(model, latest_model_path)
-    legacy_path = ARTIFACTS_DIR / model_name
-    save_model(model, legacy_path)
 
     # Infer model signature if sample data is provided
     signature = None
@@ -251,8 +289,9 @@ def persist_and_track_task(
     except Exception as m_err:
         logger.warning("Failed saving metrics.json: %s", m_err)
 
-    # Export dynamic reference distribution for drift monitoring
-    _export_reference_distribution(sample_X, tracker)
+    # Export dynamic reference distribution for drift monitoring (from full training set)
+    ref_features = full_X if full_X is not None else sample_X
+    _export_reference_distribution(ref_features, tracker)
 
     # Persist model artifacts to storage backend (e.g. Azure Blob or Local)
     try:
@@ -265,7 +304,7 @@ def persist_and_track_task(
 
     # Register the model in MLflow Model Registry with Champion vs Challenger comparison
     val_mae = metrics.get("validation", {}).get("mae")
-    tracker.log_and_register_model(
+    reg_result = tracker.log_and_register_model(
         model=model,
         artifact_path="model",
         registered_model_name=settings.model.name,
@@ -276,6 +315,10 @@ def persist_and_track_task(
         metric_name="val_mae",
         higher_is_better=False,
     )
+    logger.info("Model registration completed: %s", reg_result)
+
+    # Automate Post-Promotion API Reload if newly trained model was promoted or registered
+    _trigger_api_reload()
 
     run_info = tracker.end_run()
     return {
@@ -286,11 +329,38 @@ def persist_and_track_task(
     }
 
 
-def _log_feature_importance(tracker: MLflowTracker, model: Any) -> None:
-    """Gap 18: Extract and log feature importance scores."""
-    try:
+def _trigger_api_reload() -> None:
+    """Notify live FastAPI service to hot-reload the newly promoted champion model."""
+    import requests
 
-        # HistGradientBoostingRegressor exposes feature_importances_
+    api_host = os.getenv("FLEETSENSE_API_HOST") or settings.api.host or "127.0.0.1"
+    api_port = os.getenv("FLEETSENSE_API_PORT") or settings.api.port or 8000
+    if api_host in ("0.0.0.0", ""):
+        api_host = "127.0.0.1"
+    reload_url = f"http://{api_host}:{api_port}/model/reload"
+
+    try:
+        logger.info("Signaling running FleetSense API at %s to hot-reload model...", reload_url)
+        resp = requests.post(reload_url, timeout=5)
+        if resp.status_code == 200:
+            logger.info("Successfully reloaded model on live API service: %s", resp.json())
+        else:
+            logger.warning("API reload request returned HTTP %d: %s", resp.status_code, resp.text)
+    except Exception as exc:
+        logger.info("Live API service is currently offline or unreachable (%s). Reload skipped.", exc)
+
+
+def _log_feature_importance(
+    tracker: MLflowTracker,
+    model: Any,
+    X_val: Any = None,
+    y_val: Any = None,
+) -> None:
+    """Extract and log feature importance scores (tree-based or permutation importance)."""
+    try:
+        importances = None
+        feature_names = None
+
         if hasattr(model, "feature_importances_"):
             importances = model.feature_importances_
             feature_names = (
@@ -298,14 +368,34 @@ def _log_feature_importance(tracker: MLflowTracker, model: Any) -> None:
                 if hasattr(model, "feature_names_in_")
                 else [f"feature_{i}" for i in range(len(importances))]
             )
-            # Log each importance as a metric (prefixed with "fi_")
+        elif X_val is not None and y_val is not None and hasattr(model, "predict"):
+            # HistGradientBoostingRegressor uses permutation importance
+            from sklearn.inspection import permutation_importance
+
+            eval_X = X_val.head(1000) if len(X_val) > 1000 else X_val
+            eval_y = y_val.head(1000) if len(y_val) > 1000 else y_val
+            perm = permutation_importance(
+                model,
+                eval_X,
+                eval_y,
+                n_repeats=5,
+                random_state=settings.model.random_state,
+                n_jobs=-1,
+            )
+            importances = perm.importances_mean
+            feature_names = (
+                list(model.feature_names_in_)
+                if hasattr(model, "feature_names_in_")
+                else list(eval_X.columns)
+            )
+
+        if importances is not None and feature_names is not None:
             fi_metrics = {
                 f"fi_{name}": float(imp)
                 for name, imp in zip(feature_names, importances)
             }
             tracker.log_metrics(fi_metrics)
 
-            # Also write a human-readable summary as an artifact
             fi_lines = sorted(
                 zip(feature_names, importances), key=lambda x: x[1], reverse=True
             )
@@ -321,7 +411,7 @@ def _log_feature_importance(tracker: MLflowTracker, model: Any) -> None:
             tracker.log_artifact(fi_path)
         else:
             logger.info(
-                "Model %s does not expose feature_importances_ — skipping Gap 18 logging.",
+                "Model %s does not expose feature_importances_ and no validation data was available.",
                 type(model).__name__,
             )
     except Exception as exc:
@@ -345,8 +435,11 @@ def _export_reference_distribution(features: Any, tracker: MLflowTracker) -> Non
                             idx = i
                             break
                     counts[idx] += 1
-                total = sum(counts)
-                fractions = [c / total for c in counts] if total > 0 else []
+
+                # Apply Laplace-style smoothing so no bucket has an absolute zero probability
+                alpha = 1e-4
+                total = sum(counts) + alpha * n_buckets
+                fractions = [(c + alpha) / total for c in counts]
                 ref_payload = {
                     "buckets": list(REFERENCE_DISTANCE_BUCKETS),
                     "fractions": fractions,
@@ -357,7 +450,11 @@ def _export_reference_distribution(features: Any, tracker: MLflowTracker) -> Non
                 with ref_path.open("w", encoding="utf-8") as f:
                     json.dump(ref_payload, f, indent=2)
                 tracker.log_artifact(ref_path)
-                logger.info("Exported dynamic drift reference distribution to %s", ref_path)
+                logger.info(
+                    "Exported dynamic drift reference distribution to %s (sampled from %d rows)",
+                    ref_path,
+                    len(distances),
+                )
     except Exception as exc:
         logger.warning("Failed exporting drift reference distribution: %s", exc)
 
@@ -365,18 +462,21 @@ def _export_reference_distribution(features: Any, tracker: MLflowTracker) -> Non
 @flow(
     name="fleetsense-model-training",
     description=(
-        "Orchestrated ML training pipeline: Load Features (all months) "
-        "-> Split -> Train -> Evaluate -> Quality Gate -> MLflow Log"
+        "Orchestrated ML training pipeline: Load Features (rolling 18-month window) "
+        "-> Split -> Train -> Evaluate -> Quality Gate -> MLflow Log -> API Reload"
     ),
 )
 def train_flow(
     feature_filename: str | None = None,
     algorithm: str | None = None,
     use_all_months: bool = True,
+    max_history_months: int = 18,
     skip_quality_gate: bool = False,
+    val_cutoff: str | None = None,
+    test_cutoff: str | None = None,
 ) -> dict[str, Any]:
     """
-    FleetSense ML training workflow.
+    FleetSense ML training workflow with concurrency protection.
 
     Parameters
     ----------
@@ -385,44 +485,79 @@ def train_flow(
     algorithm:
         Override the model algorithm from config.
     use_all_months:
-        When True (default), concatenates ALL available feature files.
+        When True (default), concatenates up to max_history_months feature files.
+    max_history_months:
+        Number of historical months in the rolling window (default 18).
     skip_quality_gate:
         When True, bypasses the quality gate (use only for debugging).
+    val_cutoff:
+        Optional calendar date cutoff for validation split (e.g. '2026-07-01').
+    test_cutoff:
+        Optional calendar date cutoff for test holdout split (e.g. '2026-09-01').
     """
-    logger.info("Starting FleetSense model training flow...")
-    chosen_algo = algorithm or settings.model.algorithm
+    from filelock import FileLock, Timeout
 
-    X, y, target_file = load_features_task(
-        filename=feature_filename,
-        use_all_months=use_all_months,
-    )
-    splits = split_data_task(X=X, y=y)
+    from fleetsense.core.constants.paths import METADATA_DIR
 
-    X_train, y_train = splits["train"]
-    model = train_model_task(
-        X_train=X_train,
-        y_train=y_train,
-        algorithm=chosen_algo,
-    )
+    METADATA_DIR.mkdir(parents=True, exist_ok=True)
+    flow_lock = FileLock(str(METADATA_DIR / "training_flow.lock"), timeout=5)
 
-    metrics = evaluate_model_task(model=model, splits=splits)
+    try:
+        with flow_lock:
+            logger.info("Starting FleetSense model training flow...")
+            chosen_algo = algorithm or settings.model.algorithm
 
-    # Gap 14: Quality gate — reject bad retrains in production/staging environments
-    is_testing = os.getenv("FLEETSENSE_APP_ENV") in ("testing", "test")
-    if not skip_quality_gate and not is_testing:
-        quality_gate_task(metrics=metrics)
+            X, y, target_file, date_series = load_features_task(
+                filename=feature_filename,
+                use_all_months=use_all_months,
+                max_history_months=max_history_months,
+            )
+            splits = split_data_task(
+                X=X,
+                y=y,
+                date_series=date_series,
+                val_cutoff=val_cutoff,
+                test_cutoff=test_cutoff,
+            )
 
-    result = persist_and_track_task(
-        model=model,
-        dataset_name=target_file,
-        metrics=metrics,
-        algorithm=chosen_algo,
-        sample_X=X_train.head(10),
-        sample_y=y_train.head(10),
-    )
+            X_train, y_train = splits["train"]
+            model = train_model_task(
+                X_train=X_train,
+                y_train=y_train,
+                algorithm=chosen_algo,
+            )
 
-    logger.info("Training workflow successfully completed.")
-    return result
+            metrics = evaluate_model_task(model=model, splits=splits)
+
+            # Gap 14: Quality gate — reject bad retrains in production/staging environments
+            is_testing = os.getenv("FLEETSENSE_APP_ENV") in ("testing", "test")
+            if not skip_quality_gate and not is_testing:
+                quality_gate_task(metrics=metrics)
+
+            X_val, y_val = splits["validation"]
+            result = persist_and_track_task(
+                model=model,
+                dataset_name=target_file,
+                metrics=metrics,
+                algorithm=chosen_algo,
+                sample_X=X_train.head(10),
+                sample_y=y_train.head(10),
+                full_X=X_train,
+                X_val=X_val,
+                y_val=y_val,
+            )
+
+            logger.info("Training workflow successfully completed.")
+            return result
+    except Timeout:
+        logger.warning(
+            "Another model training flow is currently executing. "
+            "Skipping concurrent training run to prevent race conditions."
+        )
+        return {
+            "status": "skipped",
+            "reason": "concurrent_run_in_progress",
+        }
 
 
 if __name__ == "__main__":

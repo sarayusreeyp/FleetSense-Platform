@@ -9,7 +9,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - FLEETSENSE_APP_ENV=production
+      - FLEETSENSE_APP_ENV=${FLEETSENSE_APP_ENV:-development}
       - FLEETSENSE_STORAGE_BACKEND=local
       - FLEETSENSE_STORAGE_LOCAL_ROOT=/app/data
       - FLEETSENSE_MODEL_ARTIFACT_PATH=/app/artifacts/models/latest_model.joblib
@@ -52,7 +52,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
       - ./deploy/monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
@@ -61,19 +61,44 @@ services:
       - prometheus
     restart: unless-stopped
 
+  postgres:
+    image: postgres:15-alpine
+    container_name: fleetsense-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=mlflow
+      - POSTGRES_PASSWORD=mlflow
+      - POSTGRES_DB=mlflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlflow -d mlflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.14.0
     container_name: fleetsense-mlflow
     ports:
       - "5000:5000"
-    # In local development: SQLite backend store + local directory artifacts.
-    # In production: replace backend-store-uri with PostgreSQL and default-artifact-root with azure://<container>/mlflow or s3://<bucket>/mlflow.
-    command: mlflow server --backend-store-uri sqlite:////mlflow/mlflow.db --default-artifact-root /mlflow/artifacts --serve-artifacts --host 0.0.0.0 --port 5000
+    command: >
+      mlflow server
+      --backend-store-uri postgresql://mlflow:mlflow@postgres:5432/mlflow
+      --default-artifact-root /mlflow/artifacts
+      --serve-artifacts
+      --host 0.0.0.0
+      --port 5000
     environment:
       - AZURE_STORAGE_CONNECTION_STRING=${AZURE_STORAGE_CONNECTION_STRING:-}
     volumes:
       - ./artifacts/mlruns:/mlflow/artifacts
       - ./metadata:/mlflow
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   prefect-worker:
@@ -81,12 +106,14 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: fleetsense-prefect-worker
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      - FLEETSENSE_APP_ENV=production
+      - FLEETSENSE_APP_ENV=${FLEETSENSE_APP_ENV:-development}
       - FLEETSENSE_STORAGE_BACKEND=local
       - FLEETSENSE_STORAGE_LOCAL_ROOT=/app/data
       - MLFLOW_TRACKING_URI=http://mlflow:5000
-      - PREFECT_API_URL=${PREFECT_API_URL:-http://localhost:4200/api}
+      - PREFECT_API_URL=${PREFECT_API_URL:-http://host.docker.internal:4200/api}
       - PREFECT_API_KEY=${PREFECT_API_KEY:-}
     volumes:
       - ./data:/app/data
@@ -98,3 +125,7 @@ services:
       - api
       - mlflow
     restart: unless-stopped
+
+volumes:
+  postgres_data:
+

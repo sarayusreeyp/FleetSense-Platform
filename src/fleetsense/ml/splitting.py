@@ -75,6 +75,72 @@ def split_dataset(
     }
 
 
+def split_dataset_by_date(
+    features: pd.DataFrame,
+    target: pd.Series,
+    date_column: pd.Series,
+    val_cutoff: str | pd.Timestamp,
+    test_cutoff: str | pd.Timestamp,
+) -> dict[str, tuple[pd.DataFrame, pd.Series]]:
+    """
+    Split features and target chronologically using explicit calendar cutoffs.
+
+    Parameters
+    ----------
+    features : pd.DataFrame
+        Input feature matrix.
+    target : pd.Series
+        Regression target.
+    date_column : pd.Series
+        Pickup timestamp series corresponding to rows in features.
+    val_cutoff : str | pd.Timestamp
+        Date after which rows belong to validation (or test).
+        Example: '2026-07-01' means rows before this date belong to train.
+    test_cutoff : str | pd.Timestamp
+        Date after which rows belong to test holdout.
+        Example: '2026-09-01' means rows on or after this date belong to test.
+
+    Returns
+    -------
+    dict[str, tuple[pd.DataFrame, pd.Series]]
+        Train, validation, and test partitions.
+    """
+    if len(features) != len(target) or len(features) != len(date_column):
+        raise DataValidationError(
+            message="Features, target, and date_column must all contain the same number of rows."
+        )
+
+    ts = pd.to_datetime(date_column, errors="coerce")
+    val_ts = pd.to_datetime(val_cutoff)
+    test_ts = pd.to_datetime(test_cutoff)
+
+    if val_ts >= test_ts:
+        raise DataValidationError(
+            message=f"Validation cutoff ({val_ts}) must be strictly earlier than test cutoff ({test_ts})."
+        )
+
+    train_mask = ts < val_ts
+    val_mask = (ts >= val_ts) & (ts < test_ts)
+    test_mask = ts >= test_ts
+
+    X_train, y_train = features[train_mask].copy(), target[train_mask].copy()
+    X_val, y_val = features[val_mask].copy(), target[val_mask].copy()
+    X_test, y_test = features[test_mask].copy(), target[test_mask].copy()
+
+    _validate_split_sizes(
+        X_train=X_train,
+        X_validation=X_val,
+        X_test=X_test,
+        expected_total=len(features),
+    )
+
+    return {
+        "train": (X_train, y_train),
+        "validation": (X_val, y_val),
+        "test": (X_test, y_test),
+    }
+
+
 def _validate_inputs(
     features: pd.DataFrame,
     target: pd.Series,

@@ -1,3 +1,7 @@
+from fleetsense.monitoring.drift import (
+    DRIFT_ALERTS_TOTAL,
+    check_and_alert_drift,
+)
 from fleetsense.monitoring.metrics import (
     HTTP_REQUEST_DURATION_SECONDS,
     HTTP_REQUESTS_TOTAL,
@@ -18,6 +22,8 @@ __all__ = [
     "PREDICTED_DURATION_HISTOGRAM",
     "INCOMING_TRIP_DISTANCE_HISTOGRAM",
     "MODEL_LOAD_STATUS",
+    "DRIFT_ALERTS_TOTAL",
+    "check_and_alert_drift",
     "record_prediction",
     "record_batch_predictions",
     "set_model_status",

@@ -59,9 +59,11 @@ class Storage(ABC):
         self,
         category: str,
         filename: str,
+        columns: list[str] | None = None,
     ) -> pd.DataFrame:
         """
         Load a stored Parquet file directly into a pandas DataFrame.
+        When columns is specified, only the projected columns are read from disk/storage.
         """
         pass
 
@@ -88,6 +90,18 @@ class Storage(ABC):
     def delete(self, category: str, filename: str) -> bool:
         """
         Delete a file from storage.
+        """
+        pass
+
+    @abstractmethod
+    def clean_temp_files(self, category: str) -> int:
+        """
+        Clean up orphaned temporary (.tmp) files in a given storage category.
+
+        Returns
+        -------
+        int
+            Number of temporary files removed.
         """
         pass
 

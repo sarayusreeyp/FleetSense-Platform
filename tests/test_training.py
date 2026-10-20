@@ -121,3 +121,19 @@ def test_save_and_load_model(tmp_path: Path):
     preds_orig = model.predict(features)
     preds_loaded = loaded.predict(features)
     assert (preds_orig == preds_loaded).all()
+
+
+def test_train_model_xgboost():
+    from xgboost import XGBRegressor
+
+    features, target = sample_training_data()
+    model = train_model(
+        features=features,
+        target=target,
+        algorithm="XGBRegressor",
+        n_estimators=10,
+    )
+    assert isinstance(model, XGBRegressor)
+    preds = model.predict(features)
+    assert len(preds) == len(target)
+    assert all(p >= 0 for p in preds)

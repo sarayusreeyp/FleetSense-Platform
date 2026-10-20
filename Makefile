@@ -21,7 +21,7 @@ run-train:
 	python -m fleetsense.workflows.train
 
 mlflow-ui:
-	mlflow ui --backend-store-uri sqlite:///metadata/mlflow.db --port 5000
+	mlflow ui --backend-store-uri postgresql://mlflow:mlflow@localhost:5432/mlflow --port 5000
 
 prefect-setup:
 	prefect work-pool create fleetsense-pool --type process || true

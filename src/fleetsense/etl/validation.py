@@ -8,6 +8,7 @@ import pandas as pd
 from fleetsense.core.exceptions.data import (
     DataValidationError,
 )
+from fleetsense.core.utils.data_ops import normalize_datetime_columns as _normalize_datetime_columns
 
 REQUIRED_COLUMNS: set[str] = {
     "VendorID",
@@ -47,7 +48,8 @@ def _validate_input_structure(dataframe: pd.DataFrame) -> None:
 
 
 def _validate_required_columns(dataframe: pd.DataFrame) -> None:
-    missing_columns = REQUIRED_COLUMNS - set(dataframe.columns)
+    df = _normalize_datetime_columns(dataframe)
+    missing_columns = REQUIRED_COLUMNS - set(df.columns)
     if missing_columns:
         raise DataValidationError(
             message=f"Missing required TLC columns: {sorted(missing_columns)}"
@@ -55,7 +57,9 @@ def _validate_required_columns(dataframe: pd.DataFrame) -> None:
 
 
 def _validate_nulls(dataframe: pd.DataFrame) -> None:
-    null_percentages = dataframe.isna().mean() * 100
+    df = _normalize_datetime_columns(dataframe)
+    cols_to_check = [col for col in REQUIRED_COLUMNS if col in df.columns]
+    null_percentages = df[cols_to_check].isna().mean() * 100
     invalid_columns = {
         col: round(float(pct), 2)
         for col, pct in null_percentages.items()
@@ -149,6 +153,7 @@ def clean_and_filter_tlc_dataframe(
     tuple[pd.DataFrame, dict[str, Any]]
         Cleaned dataframe and detailed data quality report.
     """
+    dataframe = _normalize_datetime_columns(dataframe)
     _validate_input_structure(dataframe)
     _validate_required_columns(dataframe)
     _validate_nulls(dataframe)
@@ -193,6 +198,21 @@ def clean_and_filter_tlc_dataframe(
         by="tpep_pickup_datetime",
         ascending=True,
     ).reset_index(drop=True)
+
+    # Gap 1: Strict PyArrow / Pandas canonical type enforcement
+    type_casts = {
+        "VendorID": "int64",
+        "passenger_count": "int64",
+        "trip_distance": "float64",
+        "PULocationID": "int64",
+        "DOLocationID": "int64",
+        "fare_amount": "float64",
+        "total_amount": "float64",
+    }
+    for col, target_dtype in type_casts.items():
+        if col in cleaned_df.columns:
+            cleaned_df[col] = pd.to_numeric(cleaned_df[col], errors="coerce").astype(target_dtype)
+
     cleaned_count = len(cleaned_df)
     dropped_count = initial_count - cleaned_count
     loss_pct = (dropped_count / initial_count) * 100.0 if initial_count > 0 else 0.0
@@ -234,6 +254,7 @@ def validate_tlc_dataframe(
     When clean=False, strictly asserts all rows satisfy data quality rules.
     """
     _validate_input_structure(dataframe)
+    dataframe = _normalize_datetime_columns(dataframe)
     _validate_required_columns(dataframe)
     _validate_nulls(dataframe)
 

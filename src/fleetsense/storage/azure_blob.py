@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import os
 from pathlib import Path
 
@@ -119,43 +118,59 @@ class AzureBlobStorage(Storage):
         filename: str,
     ) -> str:
         """
-        Write a DataFrame to Parquet and upload it to Azure Blob Storage.
+        Write a DataFrame to Parquet and upload it to Azure Blob Storage using disk streaming.
         """
+        import tempfile
+
         blob_path = self._blob_name(category, filename)
         blob_client = self.container_client.get_blob_client(blob_path)
 
-        buffer = io.BytesIO()
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+
         try:
             dataframe.to_parquet(
-                buffer,
+                tmp_path,
                 index=False,
                 engine="pyarrow",
                 compression="snappy",
             )
-            buffer.seek(0)
-            blob_client.upload_blob(buffer, overwrite=True)
+            with tmp_path.open("rb") as stream:
+                blob_client.upload_blob(stream, overwrite=True)
             return f"azure://{self.container_name}/{blob_path}"
         except Exception as exc:
             raise StorageWriteError(
                 message=f"Failed to save DataFrame to Azure Blob {blob_path}",
                 details={"error": str(exc)},
             ) from exc
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
 
     def load_dataframe(
         self,
         category: str,
         filename: str,
+        columns: list[str] | None = None,
     ) -> pd.DataFrame:
         """
-        Download Parquet data from Azure Blob Storage into a DataFrame.
+        Download Parquet data from Azure Blob Storage into a DataFrame with optional column projection.
         """
         blob_path = self._blob_name(category, filename)
         blob_client = self.container_client.get_blob_client(blob_path)
 
+        import tempfile
         try:
-            download_stream = blob_client.download_blob()
-            buffer = io.BytesIO(download_stream.readall())
-            return pd.read_parquet(buffer)
+            with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp_file:
+                tmp_path = Path(tmp_file.name)
+                download_stream = blob_client.download_blob()
+                download_stream.readinto(tmp_file)
+
+            try:
+                return pd.read_parquet(tmp_path, columns=columns)
+            finally:
+                if tmp_path.exists():
+                    tmp_path.unlink()
         except ResourceNotFoundError as exc:
             raise StorageFileNotFoundError(
                 message=f"Azure Blob not found: {blob_path}"
@@ -212,7 +227,7 @@ class AzureBlobStorage(Storage):
             filenames = []
             for b in blobs:
                 name = b.name[len(prefix) :]
-                if name and "/" not in name:
+                if name and "/" not in name and not name.startswith(".") and not name.endswith(".tmp"):
                     filenames.append(name)
             return filenames
         except Exception as exc:
@@ -235,28 +250,67 @@ class AzureBlobStorage(Storage):
                 details={"error": str(exc)},
             ) from exc
 
-    # --- Backward compatibility methods ---
+    def clean_temp_files(self, category: str) -> int:
+        """
+        Clean up orphaned temporary (.tmp) blobs in Azure Blob Storage under category prefix.
+        """
+        prefix = f"{category}/"
+        removed_count = 0
+        try:
+            blobs = self.container_client.list_blobs(name_starts_with=prefix)
+            for b in blobs:
+                name = b.name[len(prefix) :]
+                if name.endswith(".tmp"):
+                    try:
+                        self.container_client.get_blob_client(b.name).delete_blob()
+                        removed_count += 1
+                    except Exception:
+                        pass
+            return removed_count
+        except Exception as exc:
+            raise StorageConnectionError(
+                message=f"Failed to clean temporary blobs with prefix {prefix}",
+                details={"error": str(exc)},
+            ) from exc
 
     def save_raw(self, filename: str, data: bytes) -> str:
         blob_path = self._blob_name("raw", filename)
-        self.container_client.get_blob_client(blob_path).upload_blob(
-            data, overwrite=True
-        )
-        return f"azure://{self.container_name}/{blob_path}"
+        try:
+            self.container_client.get_blob_client(blob_path).upload_blob(
+                data, overwrite=True
+            )
+            return f"azure://{self.container_name}/{blob_path}"
+        except Exception as exc:
+            raise StorageWriteError(
+                message=f"Failed to upload raw data to Azure Blob {blob_path}",
+                details={"error": str(exc)},
+            ) from exc
 
     def save_processed(self, filename: str, data: bytes) -> str:
         blob_path = self._blob_name("processed", filename)
-        self.container_client.get_blob_client(blob_path).upload_blob(
-            data, overwrite=True
-        )
-        return f"azure://{self.container_name}/{blob_path}"
+        try:
+            self.container_client.get_blob_client(blob_path).upload_blob(
+                data, overwrite=True
+            )
+            return f"azure://{self.container_name}/{blob_path}"
+        except Exception as exc:
+            raise StorageWriteError(
+                message=f"Failed to upload processed data to Azure Blob {blob_path}",
+                details={"error": str(exc)},
+            ) from exc
 
     def save_features(self, filename: str, data: bytes) -> str:
         blob_path = self._blob_name("features", filename)
-        self.container_client.get_blob_client(blob_path).upload_blob(
-            data, overwrite=True
-        )
-        return f"azure://{self.container_name}/{blob_path}"
+        try:
+            self.container_client.get_blob_client(blob_path).upload_blob(
+                data, overwrite=True
+            )
+            return f"azure://{self.container_name}/{blob_path}"
+        except Exception as exc:
+            raise StorageWriteError(
+                message=f"Failed to upload features data to Azure Blob {blob_path}",
+                details={"error": str(exc)},
+            ) from exc
 
     def exists(self, relative_path: str) -> bool:
         blob_client = self.container_client.get_blob_client(relative_path)

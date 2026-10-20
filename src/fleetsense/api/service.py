@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from datetime import timedelta
 from pathlib import Path
 
@@ -34,10 +35,11 @@ class PredictionService:
     Manages model loading, real-time feature extraction, and inference.
 
     Model resolution order:
-      1. MLflow Model Registry URI (e.g. models:/trip_duration_regressor/latest or @champion)
-      2. Explicit model_path argument
-      3. Local ARTIFACTS_DIR / DATA_DIR disk artifacts
-      4. Fallback: warn loudly and raise RuntimeError in production
+      1. MLflow Model Registry URI (if remote MLFLOW_TRACKING_URI is provided)
+      2. Remote Cloud Storage (Azure Blob Storage 'models/champion/...')
+      3. Explicit model_path argument
+      4. Local ARTIFACTS_DIR / DATA_DIR disk artifacts
+      5. Fallback: warn loudly and raise RuntimeError in production
     """
 
     #: Set to True only during unit tests to permit the lightweight dummy fallback.
@@ -50,6 +52,9 @@ class PredictionService:
         resolved_path = model_path or os.getenv("FLEETSENSE_MODEL_ARTIFACT_PATH")
         self.model_path = Path(resolved_path) if resolved_path else None
         self.model_source: str = "unloaded"
+        self.mlflow_run_id: str | None = None
+        self.mlflow_model_version: str | None = None
+        self._lock = threading.Lock()
         self._load_or_initialize_model()
 
     def _load_or_initialize_model(self) -> None:
@@ -82,12 +87,58 @@ class PredictionService:
                     )
                     self.model = mlflow.sklearn.load_model(uri)
                     self.model_source = f"mlflow:{uri}"
+                    # Extract MLflow lineage metadata
+                    try:
+                        from mlflow.tracking import MlflowClient
+                        client = MlflowClient(tracking_uri=tracking_uri)
+                        model_name = settings.model.name
+                        alias = os.getenv("MLFLOW_MODEL_ALIAS", "champion")
+                        try:
+                            mv = client.get_model_version_by_alias(model_name, alias)
+                            self.mlflow_run_id = mv.run_id
+                            self.mlflow_model_version = mv.version
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
                     logger.info("Successfully loaded model from MLflow Model Registry: %s", uri)
                     return
                 except Exception as exc:
                     logger.info("Could not load from MLflow Model Registry (%s): %s", uri, exc)
 
-        # 2. Check explicit path (passed in or from FLEETSENSE_MODEL_ARTIFACT_PATH)
+        # 2. Check Azure Blob Storage for remote Champion model
+        try:
+            from fleetsense.storage.factory import get_storage
+            active_storage = get_storage()
+            remote_model_filename = os.getenv("FLEETSENSE_REMOTE_MODEL_FILENAME", "trip_duration_model.joblib")
+            remote_category = os.getenv("FLEETSENSE_REMOTE_MODEL_CATEGORY", "models/champion")
+            
+            # Check if this remote model exists in storage
+            if hasattr(active_storage, "download_to_file") and active_storage.exists(f"{remote_category}/{remote_model_filename}"):
+                cache_dir = MODELS_DIR / "cache"
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                local_cache_path = cache_dir / remote_model_filename
+                
+                logger.info(
+                    "Downloading champion model from %s/%s to local cache %s...",
+                    remote_category,
+                    remote_model_filename,
+                    local_cache_path,
+                )
+                active_storage.download_to_file(
+                    category=remote_category,
+                    filename=remote_model_filename,
+                    destination_path=local_cache_path,
+                )
+                self.model = joblib.load(local_cache_path)
+                self.model_path = local_cache_path
+                self.model_source = f"storage:{remote_category}/{remote_model_filename}"
+                logger.info("Successfully loaded champion model from cloud storage (%s)", self.model_source)
+                return
+        except Exception as exc:
+            logger.info("Could not load model from cloud storage: %s", exc)
+
+        # 3. Check explicit path (passed in or from FLEETSENSE_MODEL_ARTIFACT_PATH)
         if self.model_path and self.model_path.exists():
             try:
                 self.model = joblib.load(self.model_path)
@@ -180,21 +231,49 @@ class PredictionService:
             self.model_source = "dummy:baseline"
             return
 
-        # 5. No model found and not in test mode — fail loudly
-        raise RuntimeError(
-            "FleetSense API failed to start: no trained model could be loaded.\n"
-            "Checked locations:\n"
-            f"  - MLflow Model Registry: {mlflow_model_uri}\n"
-            f"  - Local ARTIFACTS_DIR: {ARTIFACTS_DIR}\n"
-            f"  - Local DATA_DIR/models: {DATA_DIR / 'models'}\n\n"
-            "Train and register a model first by running: python -m fleetsense.workflows.train\n"
-            "Or configure MLFLOW_TRACKING_URI to point to your MLflow server."
+        # 5. No model found and strict mode enabled — fail loudly
+        if os.getenv("STRICT_MODEL_LOAD", "false").lower() == "true":
+            raise RuntimeError(
+                "FleetSense API failed to start: no trained model could be loaded.\n"
+                "Checked locations:\n"
+                f"  - MLflow Model Registry: {mlflow_model_uri}\n"
+                f"  - Local ARTIFACTS_DIR: {ARTIFACTS_DIR}\n"
+                f"  - Local DATA_DIR/models: {DATA_DIR / 'models'}\n\n"
+                "Train and register a model first by running: python -m fleetsense.workflows.train\n"
+                "Or configure MLFLOW_TRACKING_URI to point to your MLflow server."
+            )
+
+        # Graceful startup without model — API stays alive, reports health as 'unavailable'
+        logger.warning(
+            "FleetSense API initialized without a trained model artifact. "
+            "Endpoints /predict and /predict/batch will return errors until a model is deployed. "
+            "Health status is 'unavailable'."
         )
+        self.model = None
+        self.model_source = "unloaded"
 
     @property
     def is_dummy(self) -> bool:
         """True if the service is running on a dummy model (not a real trained artifact)."""
         return self.model_source.startswith("dummy:")
+
+    def reload_model(self) -> dict[str, str]:
+        """Thread-safe hot-reload of the model from MLflow."""
+        with self._lock:
+            old_source = self.model_source
+            old_version = self.mlflow_model_version
+            self.model = None
+            self.model_source = "unloaded"
+            self.mlflow_run_id = None
+            self.mlflow_model_version = None
+            self._load_or_initialize_model()
+            return {
+                "previous_source": old_source,
+                "previous_version": old_version or "unknown",
+                "new_source": self.model_source,
+                "new_version": self.mlflow_model_version or "unknown",
+                "status": "reloaded" if self.model is not None else "failed",
+            }
 
     def extract_features(
         self,
@@ -239,6 +318,9 @@ class PredictionService:
 
     def predict_trip(self, trip: TripFeaturesPayload) -> PredictionResponse:
         """Predict duration for a single trip."""
+        if self.model is None:
+            raise RuntimeError("Inference model is not currently loaded on the server.")
+
         X = self.extract_features([trip])
         pred_duration = float(self.model.predict(X)[0])
         pred_duration = max(1.0, round(pred_duration, 2))
@@ -254,6 +336,7 @@ class PredictionService:
             model_version=self.model_version,
             model_algorithm=self.algorithm,
             model_source=self.model_source,
+            mlflow_run_id=self.mlflow_run_id,
         )
 
     def predict_batch(
@@ -261,6 +344,9 @@ class PredictionService:
         request: BatchPredictionRequest,
     ) -> BatchPredictionResponse:
         """Predict durations for multiple trips in a vectorized pass."""
+        if self.model is None:
+            raise RuntimeError("Inference model is not currently loaded on the server.")
+
         X = self.extract_features(request.trips)
         raw_predictions = self.model.predict(X)
 
@@ -278,6 +364,7 @@ class PredictionService:
                     model_version=self.model_version,
                     model_algorithm=self.algorithm,
                     model_source=self.model_source,
+                    mlflow_run_id=self.mlflow_run_id,
                 )
             )
 

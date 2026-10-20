@@ -5,9 +5,9 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
@@ -44,11 +44,23 @@ class InMemoryRateLimiter:
     def __init__(self, requests_per_minute: int = 60) -> None:
         self.rate = requests_per_minute
         self.window = 60.0  # seconds
-        self._history: dict[str, collections.deque[float]] = collections.defaultdict(collections.deque)
+        self._history: dict[str, collections.deque[float]] = {}
+        self._last_cleanup = time.time()
 
     def check(self, client_ip: str) -> bool:
         now = time.time()
+        # Periodic cleanup of idle client IPs every 60 seconds to prevent unbounded memory growth
+        if now - self._last_cleanup > 60.0:
+            stale_cutoff = now - self.window
+            stale_keys = [ip for ip, dq in self._history.items() if not dq or dq[-1] < stale_cutoff]
+            for ip in stale_keys:
+                del self._history[ip]
+            self._last_cleanup = now
+
+        if client_ip not in self._history:
+            self._history[client_ip] = collections.deque()
         timestamps = self._history[client_ip]
+
         # Drop timestamps older than 60 seconds
         while timestamps and timestamps[0] < now - self.window:
             timestamps.popleft()
@@ -60,6 +72,15 @@ class InMemoryRateLimiter:
 
 rate_limiter_single = InMemoryRateLimiter(requests_per_minute=60)
 rate_limiter_batch = InMemoryRateLimiter(requests_per_minute=20)
+
+
+def _get_client_ip(request: Request) -> str:
+    """Extract real client IP, respecting X-Forwarded-For behind reverse proxies / ingress."""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        # Leftmost entry is the client's original IP
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -154,24 +175,37 @@ async def monitor_requests(request: Request, call_next):
     request.state.request_id = request_id
 
     start_time = time.perf_counter()
-    response = await call_next(request)
-    duration = time.perf_counter() - start_time
     raw_path = request.url.path
     known_endpoints = {"/", "/health", "/metrics", "/predict", "/predict/batch", "/docs", "/openapi.json"}
     endpoint = raw_path if raw_path in known_endpoints else "unmatched"
 
-    HTTP_REQUESTS_TOTAL.labels(
-        method=request.method,
-        endpoint=endpoint,
-        status=str(response.status_code),
-    ).inc()
-    HTTP_REQUEST_DURATION_SECONDS.labels(
-        method=request.method,
-        endpoint=endpoint,
-    ).observe(duration)
+    try:
+        response = await call_next(request)
+        duration = time.perf_counter() - start_time
+        HTTP_REQUESTS_TOTAL.labels(
+            method=request.method,
+            endpoint=endpoint,
+            status=str(response.status_code),
+        ).inc()
+        HTTP_REQUEST_DURATION_SECONDS.labels(
+            method=request.method,
+            endpoint=endpoint,
+        ).observe(duration)
 
-    response.headers["X-Request-ID"] = request_id
-    return response
+        response.headers["X-Request-ID"] = request_id
+        return response
+    except Exception:
+        duration = time.perf_counter() - start_time
+        HTTP_REQUESTS_TOTAL.labels(
+            method=request.method,
+            endpoint=endpoint,
+            status="500",
+        ).inc()
+        HTTP_REQUEST_DURATION_SECONDS.labels(
+            method=request.method,
+            endpoint=endpoint,
+        ).observe(duration)
+        raise
 
 
 @app.exception_handler(FleetSenseError)
@@ -231,7 +265,38 @@ async def health_check() -> HealthResponse:
         model_algorithm=algorithm,
         model_source=model_source,
         is_dummy_model=is_dummy,
+        mlflow_run_id=getattr(service, "mlflow_run_id", None) if service else None,
+        mlflow_model_version=getattr(service, "mlflow_model_version", None) if service else None,
     )
+
+
+@app.post(
+    "/model/reload",
+    tags=["Management"],
+    summary="Hot-Reload Active Model from MLflow Registry",
+)
+async def reload_active_model(request: Request) -> dict[str, Any]:
+    """
+    Trigger dynamic hot-reloading of the ML model from the MLflow Model Registry
+    without restarting the API server.
+    """
+    service: PredictionService = getattr(app.state, "prediction_service", None)
+    if not service:
+        service = PredictionService()
+        app.state.prediction_service = service
+
+    reload_result = service.reload_model()
+    set_model_status(
+        loaded=(service.model is not None),
+        model_name=service.algorithm or "None",
+    )
+    logger.info("MODEL_RELOAD_EVENT result=%s", reload_result)
+    return {
+        "status": "success" if service.model is not None else "failed",
+        "details": reload_result,
+        "mlflow_run_id": service.mlflow_run_id,
+        "mlflow_model_version": service.mlflow_model_version,
+    }
 
 
 @app.get(
@@ -252,13 +317,17 @@ async def metrics(request: Request) -> Response:
     tags=["Inference"],
     summary="Single Trip Duration Prediction",
 )
-async def predict_trip(request: Request, payload: TripFeaturesPayload) -> PredictionResponse:
+async def predict_trip(
+    request: Request,
+    payload: TripFeaturesPayload,
+    background_tasks: BackgroundTasks,
+) -> PredictionResponse:
     """
     Predict the duration of an individual taxi trip based on pickup time,
     distance, and location zones.
     """
-    # Gap 19: Rate limiting check
-    client_ip = request.client.host if request.client else "unknown"
+    # Rate limiting check
+    client_ip = _get_client_ip(request)
     if not rate_limiter_single.check(client_ip):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -269,6 +338,12 @@ async def predict_trip(request: Request, payload: TripFeaturesPayload) -> Predic
     if not service:
         service = PredictionService()
         app.state.prediction_service = service
+
+    if service.model is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Inference model is not currently loaded on the server.",
+        )
 
     request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
 
@@ -297,10 +372,18 @@ async def predict_trip(request: Request, payload: TripFeaturesPayload) -> Predic
             status="success",
         )
 
-        # Gap 17: drift check
-        check_and_alert_drift(trip_distance=payload.trip_distance)
+        # Offload drift check to background tasks to keep prediction latency minimal
+        background_tasks.add_task(
+            check_and_alert_drift,
+            trip_distance=payload.trip_distance,
+            predicted_duration_minutes=result.predicted_duration_minutes,
+        )
 
         return result
+    except HTTPException:
+        raise
+    except FleetSenseError:
+        raise
     except Exception as exc:
         record_prediction(
             predicted_duration_minutes=0.0,
@@ -315,8 +398,8 @@ async def predict_trip(request: Request, payload: TripFeaturesPayload) -> Predic
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Inference error: {exc}",
-        )
+            detail="Inference error occurred while processing the request.",
+        ) from exc
 
 
 @app.post(
@@ -325,12 +408,16 @@ async def predict_trip(request: Request, payload: TripFeaturesPayload) -> Predic
     tags=["Inference"],
     summary="Batch Trip Duration Predictions",
 )
-async def predict_batch(request: Request, batch_request: BatchPredictionRequest) -> BatchPredictionResponse:
+async def predict_batch(
+    request: Request,
+    batch_request: BatchPredictionRequest,
+    background_tasks: BackgroundTasks,
+) -> BatchPredictionResponse:
     """
     Predict durations for multiple taxi trips in a single vectorized batch pass.
     """
-    # Gap 19: Rate limiting check
-    client_ip = request.client.host if request.client else "unknown"
+    # Rate limiting check
+    client_ip = _get_client_ip(request)
     if not rate_limiter_batch.check(client_ip):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -341,6 +428,12 @@ async def predict_batch(request: Request, batch_request: BatchPredictionRequest)
     if not service:
         service = PredictionService()
         app.state.prediction_service = service
+
+    if service.model is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Inference model is not currently loaded on the server.",
+        )
 
     request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
 
@@ -369,11 +462,19 @@ async def predict_batch(request: Request, batch_request: BatchPredictionRequest)
             status="success",
         )
 
-        # Gap 17: drift check
-        for dist in distances:
-            check_and_alert_drift(trip_distance=dist)
+        # Offload drift check for all batch trips to background tasks
+        for dist, dur in zip(distances, durations):
+            background_tasks.add_task(
+                check_and_alert_drift,
+                trip_distance=dist,
+                predicted_duration_minutes=dur,
+            )
 
         return result
+    except HTTPException:
+        raise
+    except FleetSenseError:
+        raise
     except Exception as exc:
         record_batch_predictions(
             durations=[0.0] * len(batch_request.trips),
@@ -388,5 +489,5 @@ async def predict_batch(request: Request, batch_request: BatchPredictionRequest)
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Batch inference error: {exc}",
-        )
+            detail="Batch inference error occurred while processing the request.",
+        ) from exc

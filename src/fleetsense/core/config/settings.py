@@ -56,7 +56,7 @@ class QualityGateConfig(BaseModel):
 
 class ModelConfig(BaseModel):
     name: str = "trip_duration_regressor"
-    algorithm: str = "HistGradientBoostingRegressor"
+    algorithm: str = "XGBRegressor"
     target_column: str = "trip_duration_minutes"
     max_duration_minutes: float = 1440.0
     features: list[str] = Field(
@@ -87,7 +87,7 @@ class ModelConfig(BaseModel):
     train_ratio: float = 0.70
     validation_ratio: float = 0.15
     test_ratio: float = 0.15
-    mlflow_tracking_uri: str = "sqlite:///metadata/mlflow.db"
+    mlflow_tracking_uri: str = "postgresql://mlflow:mlflow@localhost:5432/mlflow"
     mlflow_experiment_name: str = "fleetsense-trip-duration"
 
     # Gap 14: Quality gate thresholds — read from model.yaml quality_gate section
@@ -96,6 +96,10 @@ class ModelConfig(BaseModel):
     # Gap 24: Trip distance validation bounds (mirrors schemas.py TRIP_DISTANCE_MAX)
     trip_distance_min: float = 0.0
     trip_distance_max: float = 100.0
+
+    # Real-time Drift Detection PSI Thresholds
+    drift_warning_threshold: float = 0.10
+    drift_alert_threshold: float = 0.20
 
     @property
     def quality_gate_max_mae(self) -> float | None:

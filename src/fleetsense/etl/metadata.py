@@ -15,6 +15,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from filelock import FileLock
+
+from fleetsense.core.config import settings
 from fleetsense.core.constants.paths import METADATA_DIR
 from fleetsense.core.logger import get_logger
 
@@ -47,9 +50,12 @@ class IngestionMetadata:
             else DEFAULT_METADATA_PATH
         )
         self._local_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = FileLock(str(self._local_path) + ".lock", timeout=30)
         self._backend = (
-            os.getenv("FLEETSENSE_STORAGE_BACKEND", "local").lower()
-        )
+            os.getenv("FLEETSENSE_STORAGE_BACKEND")
+            or os.getenv("STORAGE_BACKEND")
+            or getattr(getattr(settings, "storage", None), "backend", "local")
+        ).lower()
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -76,16 +82,26 @@ class IngestionMetadata:
 
     def _save_to_azure(self, data: dict[str, Any]) -> None:
         """Upload ingestion state JSON to Azure Blob Storage."""
+        temporary_path = self._local_path.with_suffix(".tmp")
         try:
             storage = self._get_azure_storage()
-            import io
-            buf = json.dumps(data, indent=2).encode("utf-8")
-            blob_path = f"{_BLOB_METADATA_CATEGORY}/{_BLOB_METADATA_FILENAME}"
-            # Use the low-level upload so we don't need a local file
-            storage.container_client.get_blob_client(blob_path).upload_blob(
-                io.BytesIO(buf), overwrite=True
-            )
-            logger.debug("Persisted ingestion metadata to Azure Blob: %s", blob_path)
+            with temporary_path.open("w", encoding="utf-8") as file:
+                json.dump(data, file, indent=2)
+
+            if hasattr(storage, "save_file"):
+                storage.save_file(
+                    source_path=temporary_path,
+                    category=_BLOB_METADATA_CATEGORY,
+                    filename=_BLOB_METADATA_FILENAME,
+                )
+            elif hasattr(storage, "container_client"):
+                import io
+                buf = json.dumps(data, indent=2).encode("utf-8")
+                blob_path = f"{_BLOB_METADATA_CATEGORY}/{_BLOB_METADATA_FILENAME}"
+                storage.container_client.get_blob_client(blob_path).upload_blob(
+                    io.BytesIO(buf), overwrite=True
+                )
+            logger.debug("Persisted ingestion metadata to Azure Blob: %s", _BLOB_METADATA_FILENAME)
         except Exception as exc:
             logger.warning(
                 "Failed to save ingestion metadata to Azure Blob: %s. "
@@ -93,6 +109,9 @@ class IngestionMetadata:
                 exc,
             )
             self._save_local(data)
+        finally:
+            if temporary_path.exists():
+                temporary_path.unlink()
 
     def _load_local(self) -> dict[str, Any]:
         """Load ingestion metadata from local filesystem."""
@@ -141,24 +160,80 @@ class IngestionMetadata:
         return False
 
     def mark_downloaded(self, filename: str, dataset: str) -> None:
-        """Record a successfully downloaded file."""
+        """Record a successfully downloaded file atomically under lock."""
+        with self._lock:
+            data = self.load()
+            dataset_state = data.setdefault(
+                dataset,
+                {
+                    "latest_downloaded": None,
+                    "downloaded_files": [],
+                    "last_run": None,
+                },
+            )
+
+            if filename not in dataset_state["downloaded_files"]:
+                dataset_state["downloaded_files"].append(filename)
+
+            dataset_state["latest_downloaded"] = filename
+            dataset_state["last_run"] = datetime.now(timezone.utc).isoformat()
+            files_meta = dataset_state.setdefault("file_details", {})
+            files_meta[filename] = {
+                "status": "DOWNLOADED",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+            self._save(data)
+
+    def mark_processed(self, filename: str, dataset: str, report: dict[str, Any] | None = None) -> None:
+        """Record that a downloaded dataset has been cleaned and processed."""
+        with self._lock:
+            data = self.load()
+            dataset_state = data.setdefault(
+                dataset,
+                {
+                    "latest_downloaded": None,
+                    "downloaded_files": [],
+                    "last_run": None,
+                },
+            )
+            files_meta = dataset_state.setdefault("file_details", {})
+            files_meta[filename] = {
+                "status": "PROCESSED",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "report": report or {},
+            }
+            self._save(data)
+
+    def mark_failed(self, filename: str, dataset: str, error: str) -> None:
+        """Record a failure during processing."""
+        with self._lock:
+            data = self.load()
+            dataset_state = data.setdefault(
+                dataset,
+                {
+                    "latest_downloaded": None,
+                    "downloaded_files": [],
+                    "last_run": None,
+                },
+            )
+            files_meta = dataset_state.setdefault("file_details", {})
+            files_meta[filename] = {
+                "status": "FAILED",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "error": error,
+            }
+            self._save(data)
+
+    def get_file_status(self, filename: str, dataset: str = "yellow") -> str | None:
+        """Return the current status of a specific file ('DOWNLOADED', 'PROCESSED', 'FAILED', or None)."""
         data = self.load()
-        dataset_state = data.setdefault(
-            dataset,
-            {
-                "latest_downloaded": None,
-                "downloaded_files": [],
-                "last_run": None,
-            },
-        )
-
-        if filename not in dataset_state["downloaded_files"]:
-            dataset_state["downloaded_files"].append(filename)
-
-        dataset_state["latest_downloaded"] = filename
-        dataset_state["last_run"] = datetime.now(timezone.utc).isoformat()
-
-        self._save(data)
+        details = data.get(dataset, {}).get("file_details", {})
+        if filename in details:
+            return details[filename].get("status")
+        if filename in data.get(dataset, {}).get("downloaded_files", []):
+            return "DOWNLOADED"
+        return None
 
     def get_state(self, dataset: str = "yellow") -> dict[str, Any]:
         """Return ingestion state for a dataset."""

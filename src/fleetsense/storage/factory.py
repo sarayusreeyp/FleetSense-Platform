@@ -36,8 +36,22 @@ def get_storage(
     chosen_backend = (
         backend
         or os.getenv("FLEETSENSE_STORAGE_BACKEND")
+        or os.getenv("STORAGE_BACKEND")
         or settings.storage.backend
     ).lower()
+
+    # Enforce Azure Blob Storage in production/staging environments
+    app_env = (
+        os.getenv("FLEETSENSE_APP_ENV")
+        or os.getenv("ENVIRONMENT")
+        or "development"
+    ).lower()
+    if app_env in ("production", "staging") and chosen_backend == "local":
+        raise ValueError(
+            f"Local storage backend is not permitted in '{app_env}' environment. "
+            f"Set FLEETSENSE_STORAGE_BACKEND=azure and configure "
+            f"AZURE_STORAGE_CONNECTION_STRING for production deployments."
+        )
 
     if chosen_backend == "local":
         target_root = (

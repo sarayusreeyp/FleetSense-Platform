@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ---------------------------------------------------------------------------
 # Trip distance bounds — SINGLE SOURCE OF TRUTH
@@ -58,6 +58,21 @@ class TripFeaturesPayload(BaseModel):
         examples=[236],
     )
 
+    @field_validator("pickup_datetime")
+    @classmethod
+    def validate_pickup_datetime(cls, v: datetime) -> datetime:
+        """Validate pickup_datetime falls within realistic bounds."""
+        min_year = 2020
+        # Maximum allowed timestamp: current time + 1 year (or at least 2027 to accommodate modern tests)
+        max_year = max(datetime.now().year + 1, 2027)
+        if v.year < min_year or v.year > max_year:
+            raise ValueError(
+                f"pickup_datetime year {v.year} is out of realistic bounds "
+                f"({min_year} <= year <= {max_year})."
+            )
+        return v
+
+
 
 class PredictionResponse(BaseModel):
     """Predicted trip duration and estimated dropoff time."""
@@ -82,13 +97,20 @@ class PredictionResponse(BaseModel):
         default="unknown",
         description="Where the model was loaded from (local path, azure blob, or dummy)",
     )
+    mlflow_run_id: str | None = Field(
+        default=None,
+        description="MLflow run ID that produced the loaded model",
+    )
 
 
 class BatchPredictionRequest(BaseModel):
     """Request payload containing multiple trips for bulk inference."""
 
     trips: list[TripFeaturesPayload] = Field(
-        ..., min_length=1, description="List of trip records"
+        ...,
+        min_length=1,
+        max_length=1000,
+        description="List of trip records (maximum 1000 trips per batch request)",
     )
 
 
@@ -117,4 +139,12 @@ class HealthResponse(BaseModel):
     is_dummy_model: bool = Field(
         default=False,
         description="True if a dummy baseline is running (not a real trained artifact)",
+    )
+    mlflow_run_id: str | None = Field(
+        default=None,
+        description="MLflow run ID of the currently loaded model",
+    )
+    mlflow_model_version: str | None = Field(
+        default=None,
+        description="MLflow registered model version number",
     )

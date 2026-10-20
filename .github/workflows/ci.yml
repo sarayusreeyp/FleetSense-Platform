@@ -37,12 +37,7 @@ jobs:
         run: |
           ruff check src/ tests/
 
-      - name: Validate DVC Pipeline DAG
+      - name: Run Pytest with Coverage Quality Gate
         run: |
-          pip install dvc
-          dvc dag
-          dvc stage list
+          pytest -v --tb=short --cov=src/fleetsense --cov-report=term-missing --cov-fail-under=70
 
-      - name: Run Pytest with Coverage
-        run: |
-          pytest -v --tb=short

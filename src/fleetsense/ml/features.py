@@ -3,6 +3,7 @@ from typing import Final
 import pandas as pd
 
 from fleetsense.core.exceptions.data import DataValidationError
+from fleetsense.core.utils.data_ops import normalize_datetime_columns as _normalize_datetime_columns
 
 TARGET_COLUMN: Final[str] = "trip_duration_minutes"
 
@@ -16,6 +17,7 @@ REQUIRED_COLUMNS: Final[set[str]] = {
 }
 
 
+
 def create_features(
     dataframe: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.Series]:
@@ -27,7 +29,7 @@ def create_features(
     Only information available at pickup time is retained
     in the feature dataframe.
     """
-
+    dataframe = _normalize_datetime_columns(dataframe)
     _validate_input(dataframe)
 
     data = dataframe.copy()
@@ -116,9 +118,10 @@ def _validate_input(
             message="Cannot create features from empty data."
         )
 
+    df = _normalize_datetime_columns(dataframe)
     missing_columns = (
         REQUIRED_COLUMNS
-        - set(dataframe.columns)
+        - set(df.columns)
     )
 
     if missing_columns:

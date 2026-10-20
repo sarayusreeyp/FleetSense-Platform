@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 from prefect import flow, task
 
 from fleetsense.core.logger import get_logger
@@ -85,6 +86,12 @@ def feature_engineering_task(
         features_df = X.copy()
         features_df[TARGET_COLUMN] = y
 
+        # Preserve pickup timestamp for robust cross-file chronological sorting during training
+        for ts_col in ("tpep_pickup_datetime", "lpep_pickup_datetime", "pickup_datetime"):
+            if ts_col in processed_df.columns:
+                features_df["pickup_datetime"] = pd.to_datetime(processed_df[ts_col], errors="coerce")
+                break
+
         saved_path = storage.save_dataframe(
             dataframe=features_df,
             category="features",
@@ -126,66 +133,87 @@ def etl_flow(
     trigger_training:
         When True, automatically triggers train_flow upon successful feature engineering.
     """
-    logger.info("Starting FleetSense ETL workflow...")
-    ingested_files = ingestion_task(
-        dataset=dataset,
-        year=year,
-        months=months,
-    )
+    from filelock import FileLock, Timeout
 
-    files_to_clean: list[Path | str] = list(ingested_files)
+    from fleetsense.core.constants.paths import METADATA_DIR
 
-    # If no newly ingested files, allow reprocessing existing raw files from storage
-    if not files_to_clean:
-        storage = get_storage()
-        raw_files = sorted(storage.list_files("raw"))
-        matching_raw = [
-            f for f in raw_files
-            if f.startswith(f"{dataset}_tripdata_") and f.endswith(".parquet")
-        ]
-        feature_files = storage.list_files("features")
-        should_reprocess = reprocess_existing or (matching_raw and not feature_files)
+    METADATA_DIR.mkdir(parents=True, exist_ok=True)
+    etl_lock = FileLock(str(METADATA_DIR / "etl_flow.lock"), timeout=5)
 
-        if should_reprocess and matching_raw:
-            logger.info(
-                "Processing %d existing raw file(s) from storage: %s",
-                len(matching_raw),
-                matching_raw,
+    try:
+        with etl_lock:
+            logger.info("Starting FleetSense ETL workflow...")
+            ingested_files = ingestion_task(
+                dataset=dataset,
+                year=year,
+                months=months,
             )
-            files_to_clean = matching_raw
 
-    if not files_to_clean:
-        logger.info("No files to ingest or process.")
-        return {
-            "ingested": [str(f) for f in ingested_files],
-            "processed": [],
-            "features": [],
-            "training_triggered": False,
-        }
+            files_to_clean: list[Path | str] = list(ingested_files)
 
-    processed_results = cleaning_task(raw_files=files_to_clean)
+            # If no newly ingested files, allow reprocessing existing raw files from storage
+            if not files_to_clean:
+                storage = get_storage()
+                raw_files = sorted(storage.list_files("raw"))
+                matching_raw = [
+                    f for f in raw_files
+                    if f.startswith(f"{dataset}_tripdata_") and f.endswith(".parquet")
+                ]
+                if year is not None:
+                    matching_raw = [f for f in matching_raw if f"{year:04d}" in f]
+                if months is not None:
+                    month_strs = [f"{year or 2026:04d}-{m:02d}" for m in months]
+                    matching_raw = [f for f in matching_raw if any(ms in f for ms in month_strs)]
 
-    feature_results = []
-    if run_features:
-        feature_results = feature_engineering_task(
-            processed_items=processed_results
+                if reprocess_existing and matching_raw:
+                    logger.info(
+                        "reprocess_existing=True: Processing %d existing raw file(s) from storage: %s",
+                        len(matching_raw),
+                        matching_raw,
+                    )
+                    files_to_clean = matching_raw
+
+            if not files_to_clean:
+                logger.info("No files to ingest or process.")
+                return {
+                    "ingested": [str(f) for f in ingested_files],
+                    "processed": [],
+                    "features": [],
+                    "training_triggered": False,
+                }
+
+            processed_results = cleaning_task(raw_files=files_to_clean)
+
+            feature_results = []
+            if run_features:
+                feature_results = feature_engineering_task(
+                    processed_items=processed_results
+                )
+
+            # Event-driven training trigger
+            training_triggered = False
+            if trigger_training and feature_results:
+                logger.info("trigger_training=True: Automatically triggering train_flow...")
+                from fleetsense.workflows.train import train_flow
+                train_flow()
+                training_triggered = True
+
+            logger.info("ETL workflow completed successfully.")
+            return {
+                "ingested": [str(f) for f in ingested_files],
+                "processed": processed_results,
+                "features": feature_results,
+                "training_triggered": training_triggered,
+            }
+    except Timeout:
+        logger.warning(
+            "Another ETL workflow is currently executing. "
+            "Skipping concurrent ETL run to prevent race conditions."
         )
-
-    # Event-driven training trigger
-    training_triggered = False
-    if trigger_training and feature_results:
-        logger.info("trigger_training=True: Automatically triggering train_flow...")
-        from fleetsense.workflows.train import train_flow
-        train_flow()
-        training_triggered = True
-
-    logger.info("ETL workflow completed successfully.")
-    return {
-        "ingested": [str(f) for f in ingested_files],
-        "processed": processed_results,
-        "features": feature_results,
-        "training_triggered": training_triggered,
-    }
+        return {
+            "status": "skipped",
+            "reason": "concurrent_run_in_progress",
+        }
 
 
 if __name__ == "__main__":

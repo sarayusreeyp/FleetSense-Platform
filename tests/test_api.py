@@ -141,6 +141,20 @@ def test_predict_invalid_passenger_count(client: TestClient):
     assert response.status_code == 422
 
 
+def test_predict_invalid_pickup_datetime(client: TestClient):
+    """Verify timestamps outside realistic bounds are rejected with 422."""
+    payload_ancient = {
+        "VendorID": 1,
+        "pickup_datetime": "1999-01-01T00:00:00",
+        "passenger_count": 1,
+        "trip_distance": 3.0,
+        "PULocationID": 161,
+        "DOLocationID": 236,
+    }
+    response = client.post("/predict", json=payload_ancient)
+    assert response.status_code == 422
+
+
 def test_prediction_service_remote_storage_load(tmp_path, monkeypatch):
     """Verify PredictionService downloads model from storage backend when local disk has no model."""
     from unittest.mock import MagicMock

@@ -36,7 +36,7 @@ def test_load_features_task(sample_feature_df):
     mock_storage.load_dataframe.return_value = sample_feature_df
 
     with patch("fleetsense.workflows.train.get_storage", return_value=mock_storage):
-        X, y, fname = load_features_task.fn()
+        X, y, fname, date_series = load_features_task.fn()
 
     assert len(X) == 20
     assert len(y) == 20

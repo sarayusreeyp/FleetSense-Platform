@@ -173,3 +173,47 @@ def test_azure_storage_save_and_list(mock_blob_service_client, tmp_path: Path):
 
     files = azure_storage.list_files("raw")
     assert files == ["yellow_2026.parquet"]
+
+
+def test_local_storage_clean_temp_files(temp_local_storage: LocalStorage, tmp_path: Path):
+    """Verify clean_temp_files removes .tmp files while leaving regular files intact."""
+    raw_dir = temp_local_storage.raw_dir
+    (raw_dir / "valid_data.parquet").write_bytes(b"valid")
+    (raw_dir / "interrupted_upload.tmp").write_bytes(b"temp1")
+    (raw_dir / "another_orphan.parquet.tmp").write_bytes(b"temp2")
+
+    cleaned = temp_local_storage.clean_temp_files("raw")
+    assert cleaned == 2
+    assert (raw_dir / "valid_data.parquet").exists()
+    assert not (raw_dir / "interrupted_upload.tmp").exists()
+    assert not (raw_dir / "another_orphan.parquet.tmp").exists()
+
+
+@patch("fleetsense.storage.azure_blob.BlobServiceClient")
+def test_azure_storage_clean_temp_files(mock_blob_service_client):
+    """Verify AzureBlobStorage clean_temp_files deletes .tmp blobs."""
+    mock_service = MagicMock()
+    mock_container = MagicMock()
+    mock_blob_client = MagicMock()
+
+    mock_blob_service_client.from_connection_string.return_value = mock_service
+    mock_service.get_container_client.return_value = mock_container
+    mock_container.get_blob_client.return_value = mock_blob_client
+
+    blob_valid = MagicMock()
+    blob_valid.name = "processed/data.parquet"
+    blob_tmp = MagicMock()
+    blob_tmp.name = "processed/data.parquet.tmp"
+
+    mock_container.list_blobs.return_value = [blob_valid, blob_tmp]
+
+    azure_storage = AzureBlobStorage(
+        connection_string="DefaultEndpointsProtocol=https;AccountName=test;AccountKey=fake==;",
+        container_name="test-container",
+    )
+
+    cleaned = azure_storage.clean_temp_files("processed")
+    assert cleaned == 1
+    mock_container.get_blob_client.assert_called_with("processed/data.parquet.tmp")
+    mock_blob_client.delete_blob.assert_called_once()
+
