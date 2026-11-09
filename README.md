@@ -1,246 +1,236 @@
-# FleetSense Platform 🚖⚡
+# FleetSense Platform 🚖
 
-> **Production-Grade Machine Learning Platform for NYC Taxi Trip Duration Forecasting & Real-Time Demand Intelligence.**
+An end-to-end MLOps platform for NYC taxi trip-duration prediction, covering automated data ingestion, data processing, model training, experiment tracking, API-based inference, and production monitoring.
 
-[![CI/CD Status](https://github.com/sarayusreeyp/FleetSense-Platform/actions/workflows/ci.yml/badge.svg)](https://github.com/sarayusreeyp/FleetSense-Platform/actions)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](https://www.python.org/downloads/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg?logo=fastapi)](https://fastapi.tiangolo.com)
-[![Prefect 3.0](https://img.shields.io/badge/Prefect-3.0+-024dfd.svg?logo=prefect)](https://prefect.io)
-[![DVC](https://img.shields.io/badge/Data_Version_Control-DVC-945dd6.svg?logo=dvc)](https://dvc.org)
-[![Prometheus](https://img.shields.io/badge/Metrics-Prometheus-e6522c.svg?logo=prometheus)](https://prometheus.io)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+## Overview
 
----
+FleetSense demonstrates the complete machine learning lifecycle, from raw data ingestion to model deployment and monitoring.
 
-## 📌 Architecture Overview
+**Key Features**
+- Automated ingestion of monthly NYC TLC taxi datasets.
+- Data validation, cleaning, and feature engineering.
+- Configurable ML training with XGBoost, Random Forest, and HistGradientBoosting.
+- Model evaluation using MAE, RMSE, and R².
+- Experiment tracking with MLflow.
+- Workflow orchestration using Prefect.
+- FastAPI inference service with single and batch predictions.
+- Interactive web frontend.
+- Data drift detection using PSI.
+- Prometheus metrics and Grafana dashboards.
+- Docker-based deployment and Azure infrastructure provisioning.
+- Automated testing and CI/CD using GitHub Actions.
 
-FleetSense is engineered from the ground up for high reliability, memory efficiency, and cloud scalability across multi-million row TLC datasets:
+## Architecture
 
 ```mermaid
 flowchart TD
-    subgraph Data Layer
-        NYC[NYC TLC Parquet Data] --> Ingestion[Stream-Safe Ingestion]
-        Ingestion --> Storage[Storage Engine: Local / Azure Blob]
-        Storage <--> DVC[DVC Data Versioning]
-    end
+    A[NYC TLC Data] --> B[Data Ingestion]
+    B --> C[Validation & Cleaning]
+    C --> D[Feature Engineering]
+    D --> E[Processed Features]
 
-    subgraph Data Pipeline & Orchestration
-        Storage --> ETL[Prefect ETL DAG]
-        ETL --> Val[Anomaly-Tolerant Validation]
-        Val --> FeatEng[Feature Engineering & Temporal Extraction]
-    end
+    E --> F[Model Training]
+    F --> G[Model Evaluation]
+    G --> H[MLflow Tracking]
+    G --> I[Model Artifacts]
 
-    subgraph ML Pipeline
-        FeatEng --> Train[HistGradientBoosting Regressor]
-        Train --> Track[MLflow / Metadata Audit Tracker]
-        Train --> Artifacts[Model Artifacts .joblib]
-    end
+    J[Prefect] --> B
+    J --> F
 
-    subgraph Production Serving & Observability
-        Artifacts --> API[FastAPI Inference Engine]
-        API --> Client[REST Endpoints: /predict & /predict/batch]
-        API --> Prom[Prometheus Telemetry: /metrics]
-        Prom --> Grafana[Grafana Dashboards]
-    end
+    I --> K[FastAPI]
+    K --> L[Frontend]
+    K --> M[Prometheus]
+    M --> N[Grafana]
 
-    subgraph Cloud Deployment
-        API --> Docker[Multi-Stage Docker]
-        Docker --> ACA[Azure Container Apps]
-        Docker --> AWS[AWS App Runner / ECS]
-    end
+    K --> O[Docker]
+    L --> O
+    O --> P[Azure Container Apps]
 ```
 
----
+## Technology Stack
 
-## ✨ Key Platform Features
+| Category | Technologies |
+|---|---|
+| Language | Python |
+| Data Processing | Pandas, NumPy, PyArrow |
+| Machine Learning | Scikit-learn, XGBoost |
+| Experiment Tracking | MLflow |
+| Orchestration | Prefect |
+| API | FastAPI |
+| Frontend | HTML, CSS, JavaScript |
+| Storage | Local Filesystem, Azure Blob Storage |
+| Monitoring | Prometheus, Grafana |
+| Containerization | Docker, Docker Compose |
+| Cloud | Microsoft Azure |
+| CI/CD | GitHub Actions |
+| Testing | Pytest, Ruff |
 
-1. **Memory-Safe Ingestion & Storage Abstraction**:
-   - Zero-RAM overhead streaming file downloads (`shutil.copyfileobj`).
-   - Unified Storage interface supporting atomic local operations with path traversal sanitization and native **Azure Blob Storage** integration.
-2. **Anomaly-Tolerant Validation Engine**:
-   - TLC real-world datasets often have negative distances or passenger counts. FleetSense enforces configurable quality thresholds (`max_allowed_loss_pct=35.0`), logging dropped anomalies rather than failing pipelines.
-3. **Data Version Control (DVC)**:
-   - Full versioning of raw and processed Parquet data with cloud remotes (`azure://` or `s3://`).
-4. **Fast & Scalable ML Engine**:
-   - High-throughput `HistGradientBoostingRegressor` with native categorical feature support for taxi pickup/dropoff zones.
-   - Dual-mode experiment tracking: cloud MLflow tracking with automatic graceful degradation to local audit files in `artifacts/metadata/`.
-5. **Production FastAPI Service**:
-   - Pydantic v2 validated single (`/predict`) and vectorized batch (`/predict/batch`) endpoints.
-   - Dynamic feature alignment against loaded model signatures.
-6. **Built-in Prometheus Observability**:
-   - Request latency histograms, request counters, predicted duration distributions, and incoming trip distance histograms for **data drift detection**.
-7. **Production Containerization & CI/CD**:
-   - Multi-stage non-root `Dockerfile`, automated `docker-compose` stack (API, Prometheus, Grafana), GitHub Actions CI/CD matrix, and Azure/AWS deployment scripts.
-
----
-
-## 📂 Project Structure
+## Project Structure
 
 ```text
 FleetSense-Platform/
-├── .github/workflows/         # CI/CD pipelines (Test matrix, Docker publish)
-│   ├── ci.yml
-│   └── cd.yml
-├── .dvc/                      # Data Version Control configuration
-├── configs/                   # Type-safe YAML configurations (OmegaConf/Hydra)
-│   ├── config.yaml            # App, storage, data & ingestion settings
-│   └── model.yaml             # ML model hyperparameters
-├── deploy/                    # Cloud deployment templates & scripts
-│   ├── azure/                 # Azure Container Apps & Bicep IaC
-│   ├── aws/                   # AWS App Runner deployment scripts
-│   └── monitoring/            # Prometheus scrape configuration
-├── src/fleetsense/            # Core package source code
-│   ├── api/                   # FastAPI routes, Pydantic schemas, and inference
-│   ├── core/                  # Constants, logging, config loader, exceptions
-│   ├── etl/                   # Dataset streaming, validation & processing
-│   ├── ml/                    # Training, HistGradientBoosting, experiment tracking
-│   ├── monitoring/            # Prometheus collectors & telemetry helpers
-│   ├── storage/               # Local and Azure Blob storage backends
-│   └── workflows/             # Prefect DAGs for ETL and Training
-├── tests/                     # 89 unit and integration tests (100% passing)
-├── docker-compose.yml         # Local orchestration (API + Prometheus + Grafana)
-├── Dockerfile                 # Multi-stage production container
-├── pyproject.toml             # Modern PEP 621 packaging metadata
-└── requirements.txt           # Production pinned dependencies
+├── .github/workflows/       # CI/CD pipelines
+├── configs/                 # Application and model configs
+├── data/                    # Raw, processed and feature data
+├── artifacts/               # Model artifacts
+├── metadata/                # Pipeline metadata
+├── deploy/
+│   ├── azure/                # Azure Bicep and deployment scripts
+│   └── monitoring/           # Prometheus and Grafana
+├── frontend/                # Web application
+├── src/fleetsense/
+│   ├── api/                  # FastAPI application
+│   ├── core/                 # Shared configuration and utilities
+│   ├── etl/                  # Data ingestion and validation
+│   ├── ml/                   # Training, features and evaluation
+│   ├── monitoring/           # Metrics and drift detection
+│   ├── storage/              # Storage backends
+│   └── workflows/            # Prefect workflows
+├── tests/                    # Automated tests
+├── Dockerfile
+├── Dockerfile.frontend
+├── docker-compose.yml
+├── Makefile
+├── prefect.yaml
+├── pyproject.toml
+├── requirements.txt
+└── README.md
 ```
 
----
+## Getting Started
 
-## 🚀 Quickstart & Setup
+### Prerequisites
 
-### 1. Clone & Set Up Environment
+- Python 3.11+
+- Git
+- Docker and Docker Compose
+
+### Installation
 
 ```bash
 git clone https://github.com/sarayusreeyp/FleetSense-Platform.git
 cd FleetSense-Platform
 
-# Create and activate virtual environment
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+```
 
-# Install dependencies and editable package
+Activate the environment:
+
+```bash
+# Windows
+.venv\Scripts\activate
+
+# Linux/macOS
+source .venv/bin/activate
+```
+
+Install dependencies:
+
+```bash
 pip install -r requirements.txt
 pip install -e .
 ```
 
-### 2. Configure Environment Variables
+Configure environment variables:
 
 ```bash
-# For local development:
-cp .env.development .env
+# Windows PowerShell
+Copy-Item .env.example .env
 
-# Or for production:
-# cp .env.production .env
+# Linux/macOS
+cp .env.example .env
 ```
 
-### 3. Data Version Control (DVC)
+### Run Workflows
 
 ```bash
-# Pull versioned datasets (if remote configured)
-dvc pull
-
-# Track local datasets with DVC
-dvc add data/raw/yellow_tripdata_2026-06.parquet
-git add data/raw/yellow_tripdata_2026-06.parquet.dvc
-dvc push
+make run-etl
+make run-train
 ```
 
----
-
-## 🔄 Orchestration Workflows (Prefect)
-
-### Run ETL Pipeline
-Ingests raw TLC Parquet data, executes anomaly validation, and produces engineered features:
-```bash
-python -m fleetsense.workflows.etl
-```
-
-### Run Model Training Pipeline
-Trains `HistGradientBoostingRegressor`, evaluates RMSE/MAE/R², logs metrics, and exports model artifact to `artifacts/models/latest_model.joblib`:
-```bash
-python -m fleetsense.workflows.train
-```
-
----
-
-## ⚡ Production API & Observability
-
-### Start FastAPI Server
-```bash
-uvicorn fleetsense.api.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-Interactive Swagger documentation is available at: **`http://localhost:8000/docs`**
-
-#### Predict Trip Duration Example:
-```bash
-curl -X POST "http://localhost:8000/predict" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "VendorID": 1,
-       "pickup_datetime": "2026-10-05T14:30:00",
-       "passenger_count": 2,
-       "trip_distance": 3.8,
-       "PULocationID": 161,
-       "DOLocationID": 236
-     }'
-```
-
-Response:
-```json
-{
-  "predicted_duration_minutes": 18.42,
-  "estimated_dropoff_datetime": "2026-10-05T14:48:25",
-  "model_algorithm": "HistGradientBoostingRegressor",
-  "model_version": "v1"
-}
-```
-
-#### Telemetry & Metrics:
-- Scrape Prometheus metrics: **`http://localhost:8000/metrics`**
-
----
-
-## 🐳 Docker & Docker Compose
-
-Launch the entire stack (FastAPI inference engine, Prometheus metrics collection, Grafana visualization) in one command:
+### Run API
 
 ```bash
-docker-compose up --build -d
+make run-api
 ```
 
-- **FleetSense API**: http://localhost:8000
-- **Prometheus Dashboard**: http://localhost:9090
-- **Grafana Dashboard**: http://localhost:3000 *(login: `admin` / `admin`)*
+API documentation: http://localhost:8000/docs
 
----
-
-## ☁️ Cloud Deployment
-
-Comprehensive scripts and Infrastructure-as-Code templates are located in [`deploy/`](deploy/README.md):
-
-### Deploy to Azure Container Apps:
-```bash
-chmod +x deploy/azure/deploy.sh
-./deploy/azure/deploy.sh
-```
-
----
-
-## 🧪 Testing
-
-The test suite covers configuration, logging, exceptions, storage engines, streaming downloaders, anomaly validation, Prefect DAGs, ML training, FastAPI endpoints, and Prometheus metrics.
+### Run with Docker
 
 ```bash
-pytest -v
+docker compose up --build -d
 ```
+
+| Service | URL |
+|---|---|
+| Frontend | http://localhost:8080 |
+| API | http://localhost:8000 |
+| Swagger Docs | http://localhost:8000/docs |
+| Prometheus | http://localhost:9090 |
+| Grafana | http://localhost:3000 |
+
+### Prefect Orchestration
+
+```bash
+prefect server start
+```
+
+In another terminal:
+
+```bash
+make prefect-setup
+make prefect-deploy
+make prefect-worker
+```
+
+## Azure Deployment
+
+Azure deployment resources and scripts are available under `deploy/azure/`.
 
 ```text
-============================== 89 passed in 17.81s ==============================
+deploy/azure/
+├── deploy.sh
+├── deploy.ps1
+├── infra.bicep
+└── main.bicep
 ```
 
----
+### Azure Deployment
 
-## 📄 License
+Make sure Azure CLI is installed and you're logged in:
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+```bash
+az login
+```
+
+**Windows PowerShell:**
+```powershell
+.\deploy\azure\deploy.ps1 -ResourceGroup "fleetsense-rg" -Location "centralindia"
+```
+
+The scripts use the Bicep templates to provision and deploy the platform on Azure.
+
+## Testing and Code Quality
+
+Run tests:
+
+```bash
+python -m pytest -v
+```
+
+Run linting:
+
+```bash
+ruff check src/ tests/
+```
+
+Check formatting:
+
+```bash
+ruff format --check src/ tests/
+```
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
