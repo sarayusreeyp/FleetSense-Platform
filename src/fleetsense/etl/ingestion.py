@@ -10,7 +10,6 @@ from fleetsense.core.config import settings
 from fleetsense.core.logger import get_logger
 from fleetsense.etl.downloader import TLCDownloader
 from fleetsense.etl.metadata import (
-    FeaturesMetadata,
     IngestionMetadata,
     ProcessedMetadata,
 )
@@ -39,7 +38,6 @@ def get_pending_unprocessed_files(
     Find raw files in storage that have been downloaded but not yet cleaned/processed.
     """
     active_storage = storage or get_storage()
-    ingestion_meta = IngestionMetadata()
     processed_meta = ProcessedMetadata()
 
     raw_files = active_storage.list_files("raw")

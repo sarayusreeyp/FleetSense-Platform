@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Final
 
 import joblib
+import numpy as np
 import pandas as pd
 from sklearn.base import RegressorMixin
 from sklearn.compose import TransformedTargetRegressor
@@ -11,7 +12,6 @@ from sklearn.ensemble import (
     HistGradientBoostingRegressor,
     RandomForestRegressor,
 )
-import numpy as np
 
 from fleetsense.core.exceptions.data import DataValidationError
 from fleetsense.core.exceptions.ml import ModelTrainingError

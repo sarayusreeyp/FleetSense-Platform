@@ -7,6 +7,14 @@ from pathlib import Path
 
 import pandas as pd
 
+from fleetsense.core.exceptions.storage import (
+    StorageConnectionError,
+    StorageError,
+    StorageFileNotFoundError,
+    StorageWriteError,
+)
+from fleetsense.storage.base import Storage
+
 _AZURE_IMPORT_ERROR: str | None = None
 try:
     from azure.core.exceptions import (
@@ -22,14 +30,6 @@ try:
 except Exception as exc:
     AZURE_AVAILABLE = False
     _AZURE_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
-
-from fleetsense.core.exceptions.storage import (
-    StorageConnectionError,
-    StorageError,
-    StorageFileNotFoundError,
-    StorageWriteError,
-)
-from fleetsense.storage.base import CANONICAL_STORAGE_CATEGORIES, Storage
 
 _SAFE_CATEGORY_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]+(/[a-zA-Z0-9_\-]+)*$")
 

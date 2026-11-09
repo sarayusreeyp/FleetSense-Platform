@@ -21,7 +21,7 @@ class TLCDownloader:
         self.timeout = timeout
         self.max_retries = max_retries
 
-    def __enter__(self) -> TLCDownloader:
+    def __enter__(self) -> "TLCDownloader":
         return self
 
     def __exit__(self, *args) -> None:

@@ -13,7 +13,7 @@ from fleetsense.etl.ingestion import (
     get_pending_unprocessed_files,
     run_ingestion,
 )
-from fleetsense.etl.metadata import FeaturesMetadata, IngestionMetadata, ProcessedMetadata
+from fleetsense.etl.metadata import FeaturesMetadata
 from fleetsense.ml.features import TARGET_COLUMN, create_features
 from fleetsense.storage.factory import get_storage
 

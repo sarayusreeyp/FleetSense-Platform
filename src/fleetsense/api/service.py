@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import os
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 from pathlib import Path
-from typing import Any
 
 import joblib
 import numpy as np

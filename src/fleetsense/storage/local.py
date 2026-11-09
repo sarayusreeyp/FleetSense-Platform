@@ -11,7 +11,7 @@ from fleetsense.core.exceptions.storage import (
     StorageFileNotFoundError,
     StorageWriteError,
 )
-from fleetsense.storage.base import CANONICAL_STORAGE_CATEGORIES, Storage
+from fleetsense.storage.base import Storage
 
 _SAFE_CATEGORY_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]+(/[a-zA-Z0-9_\-]+)*$")
 

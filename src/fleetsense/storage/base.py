@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import io
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import pandas as pd
