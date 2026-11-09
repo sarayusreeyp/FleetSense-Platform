@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import collections
 import math
+import threading
 from typing import Sequence
 
 from prometheus_client import Counter
@@ -28,6 +29,9 @@ from prometheus_client import Counter
 from fleetsense.core.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Concurrency lock for rolling drift windows
+_drift_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Prometheus drift metric (Gap 17)
@@ -41,14 +45,13 @@ DRIFT_ALERTS_TOTAL = Counter(
 # ---------------------------------------------------------------------------
 # Reference distribution for trip_distance (from training data, NYC taxi)
 # Bucket edges in miles — must match INCOMING_TRIP_DISTANCE_HISTOGRAM in metrics.py
+# 10 edges -> 11 intervals (0-0.5, 0.5-1, 1-2, 2-3, 3-5, 5-10, 10-15, 15-20, 20-30, 30-50, 50+)
 # ---------------------------------------------------------------------------
 _REFERENCE_DISTANCE_BUCKETS: tuple[float, ...] = (
     0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 50.0
 )
 REFERENCE_DISTANCE_BUCKETS = _REFERENCE_DISTANCE_BUCKETS
 
-# Approximate fraction of trips falling into each bucket for NYC yellow cab
-# (derived from TLC 2024-2026 data; update after each major retraining)
 _REFERENCE_DISTANCE_FRACTIONS: tuple[float, ...] = (
     0.08,  # 0–0.5
     0.14,  # 0.5–1.0
@@ -58,8 +61,9 @@ _REFERENCE_DISTANCE_FRACTIONS: tuple[float, ...] = (
     0.11,  # 5.0–10.0
     0.04,  # 10.0–15.0
     0.03,  # 15.0–20.0
-    0.02,  # 20.0–30.0
-    0.01,  # 30.0–50.0+
+    0.015, # 20.0–30.0
+    0.01,  # 30.0–50.0
+    0.005, # > 50.0
 )
 
 
@@ -216,32 +220,74 @@ def check_and_alert_drift(
 ) -> None:
     """
     Record latest observations and check for distribution drift in input features
-    and predicted durations.
+    and predicted durations with thread safety.
     """
     global _sample_counter
-    _distance_window.append(trip_distance)
-    if predicted_duration_minutes is not None:
-        _duration_window.append(predicted_duration_minutes)
-    _sample_counter += 1
+    with _drift_lock:
+        _distance_window.append(trip_distance)
+        if predicted_duration_minutes is not None:
+            _duration_window.append(predicted_duration_minutes)
+        _sample_counter += 1
 
-    if len(_distance_window) < _MIN_WINDOW_SIZE:
-        return
+        if len(_distance_window) < _MIN_WINDOW_SIZE or _sample_counter % 10 != 0:
+            return
 
-    # Throttle: Evaluate PSI every 10 samples once window is populated
-    if _sample_counter % 10 != 0:
-        return
+        # Snapshot windows safely under lock to avoid RuntimeError during iteration
+        dist_snapshot = list(_distance_window)
+        dur_snapshot = list(_duration_window) if len(_duration_window) >= _MIN_WINDOW_SIZE else None
 
     dist_buckets, dist_ref_fractions = load_reference_distribution()
     _evaluate_distribution_drift(
-        window=_distance_window,
+        window=dist_snapshot,
         buckets=dist_buckets,
         reference_fractions=dist_ref_fractions,
         feature_name="trip_distance",
     )
 
-    if len(_duration_window) >= _MIN_WINDOW_SIZE:
+    if dur_snapshot is not None:
         _evaluate_distribution_drift(
-            window=_duration_window,
+            window=dur_snapshot,
+            buckets=_REFERENCE_DURATION_BUCKETS,
+            reference_fractions=_REFERENCE_DURATION_FRACTIONS,
+            feature_name="predicted_duration_minutes",
+        )
+
+
+def check_and_alert_batch_drift(
+    distances: Sequence[float],
+    predicted_durations: Sequence[float] | None = None,
+) -> None:
+    """
+    Vectorized drift evaluation for batch prediction workloads.
+    Extends rolling windows in a single locked transaction.
+    """
+    global _sample_counter
+    if not distances:
+        return
+
+    with _drift_lock:
+        _distance_window.extend(distances)
+        if predicted_durations:
+            _duration_window.extend(predicted_durations)
+        _sample_counter += len(distances)
+
+        if len(_distance_window) < _MIN_WINDOW_SIZE:
+            return
+
+        dist_snapshot = list(_distance_window)
+        dur_snapshot = list(_duration_window) if len(_duration_window) >= _MIN_WINDOW_SIZE else None
+
+    dist_buckets, dist_ref_fractions = load_reference_distribution()
+    _evaluate_distribution_drift(
+        window=dist_snapshot,
+        buckets=dist_buckets,
+        reference_fractions=dist_ref_fractions,
+        feature_name="trip_distance",
+    )
+
+    if dur_snapshot is not None:
+        _evaluate_distribution_drift(
+            window=dur_snapshot,
             buckets=_REFERENCE_DURATION_BUCKETS,
             reference_fractions=_REFERENCE_DURATION_FRACTIONS,
             feature_name="predicted_duration_minutes",

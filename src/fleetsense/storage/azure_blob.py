@@ -1,47 +1,65 @@
 from __future__ import annotations
 
+import io
 import os
+import re
 from pathlib import Path
 
 import pandas as pd
 
+_AZURE_IMPORT_ERROR: str | None = None
 try:
     from azure.core.exceptions import (
         ResourceExistsError,
         ResourceNotFoundError,
     )
     from azure.storage.blob import BlobServiceClient
+    try:
+        from azure.identity import DefaultAzureCredential
+    except ImportError:
+        DefaultAzureCredential = None  # type: ignore[assignment, misc]
     AZURE_AVAILABLE = True
-except ImportError:
+except Exception as exc:
     AZURE_AVAILABLE = False
+    _AZURE_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
 from fleetsense.core.exceptions.storage import (
     StorageConnectionError,
+    StorageError,
     StorageFileNotFoundError,
     StorageWriteError,
 )
-from fleetsense.storage.base import Storage
+from fleetsense.storage.base import CANONICAL_STORAGE_CATEGORIES, Storage
+
+_SAFE_CATEGORY_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]+(/[a-zA-Z0-9_\-]+)*$")
 
 
 class AzureBlobStorage(Storage):
     """
     Azure Blob Storage backend for production FleetSense workloads.
     Supports streaming large datasets directly to and from Azure Blob containers.
+    Maintains 1:1 structural parity with LocalStorage categories.
     """
 
     def __init__(
         self,
         connection_string: str | None = None,
+        account_url: str | None = None,
         container_name: str = "fleetsense-data",
     ) -> None:
         if not AZURE_AVAILABLE:
             raise StorageConnectionError(
-                message="azure-storage-blob package is not installed."
+                message=f"azure-storage-blob package is not installed or failed to import ({_AZURE_IMPORT_ERROR})."
             )
 
         self.connection_string = (
             connection_string
             or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+            or ""
+        )
+        self.account_url = (
+            account_url
+            or os.getenv("AZURE_STORAGE_ACCOUNT_URL")
             or ""
         )
         self.container_name = (
@@ -51,18 +69,29 @@ class AzureBlobStorage(Storage):
             or "fleetsense-data"
         )
 
-        if not self.connection_string:
+        if not self.connection_string and not self.account_url:
             raise StorageConnectionError(
                 message=(
                     "Azure Storage connection string is missing. "
-                    "Set AZURE_STORAGE_CONNECTION_STRING in your environment or config."
+                    "Set AZURE_STORAGE_CONNECTION_STRING or AZURE_STORAGE_ACCOUNT_URL in your environment or config."
                 )
             )
 
         try:
-            self.service_client = BlobServiceClient.from_connection_string(
-                self.connection_string
-            )
+            if self.connection_string:
+                self.service_client = BlobServiceClient.from_connection_string(
+                    self.connection_string
+                )
+            else:
+                if DefaultAzureCredential is None:
+                    raise StorageConnectionError(
+                        message="azure-identity package is required when authenticating with account_url without a connection string."
+                    )
+                self.service_client = BlobServiceClient(
+                    account_url=self.account_url,
+                    credential=DefaultAzureCredential(),
+                )
+
             self.container_client = self.service_client.get_container_client(
                 self.container_name
             )
@@ -78,9 +107,19 @@ class AzureBlobStorage(Storage):
             ) from exc
 
     def _blob_name(self, category: str, filename: str) -> str:
+        """Validate category and format blob path with 1:1 parity to LocalStorage."""
+        if not category or not isinstance(category, str):
+            raise StorageError(message="Storage category must be a non-empty string.")
+
+        clean_category = category.strip()
+        if not _SAFE_CATEGORY_PATTERN.match(clean_category):
+            raise StorageError(
+                message=f"Invalid storage category '{category}'. Must be alphanumeric.",
+                details={"category": category},
+            )
+
         safe_filename = Path(filename).name
-        safe_category = Path(category).name
-        return f"{safe_category}/{safe_filename}"
+        return f"{clean_category}/{safe_filename}"
 
     def save_file(
         self,
@@ -154,23 +193,16 @@ class AzureBlobStorage(Storage):
         columns: list[str] | None = None,
     ) -> pd.DataFrame:
         """
-        Download Parquet data from Azure Blob Storage into a DataFrame with optional column projection.
+        Download Parquet data from Azure Blob Storage directly into a DataFrame.
+        Uses in-memory buffer or tempfile with guaranteed cleanup.
         """
         blob_path = self._blob_name(category, filename)
         blob_client = self.container_client.get_blob_client(blob_path)
 
-        import tempfile
         try:
-            with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp_file:
-                tmp_path = Path(tmp_file.name)
-                download_stream = blob_client.download_blob()
-                download_stream.readinto(tmp_file)
-
-            try:
-                return pd.read_parquet(tmp_path, columns=columns)
-            finally:
-                if tmp_path.exists():
-                    tmp_path.unlink()
+            download_stream = blob_client.download_blob()
+            parquet_buffer = io.BytesIO(download_stream.readall())
+            return pd.read_parquet(parquet_buffer, columns=columns)
         except ResourceNotFoundError as exc:
             raise StorageFileNotFoundError(
                 message=f"Azure Blob not found: {blob_path}"
@@ -312,8 +344,12 @@ class AzureBlobStorage(Storage):
                 details={"error": str(exc)},
             ) from exc
 
-    def exists(self, relative_path: str) -> bool:
-        blob_client = self.container_client.get_blob_client(relative_path)
+    def exists(self, relative_path: str, filename: str | None = None) -> bool:
+        if filename is not None:
+            blob_path = self._blob_name(relative_path, filename)
+        else:
+            blob_path = relative_path.replace("\\", "/").strip("/")
+        blob_client = self.container_client.get_blob_client(blob_path)
         return blob_client.exists()
 
     def load(self, relative_path: str) -> bytes:

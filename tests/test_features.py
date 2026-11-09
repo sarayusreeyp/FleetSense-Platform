@@ -64,6 +64,10 @@ def test_pickup_features_are_created():
     assert "pickup_month" in X.columns
     assert "pickup_day" in X.columns
     assert "is_weekend" in X.columns
+    assert "pickup_hour_sin" in X.columns
+    assert "pickup_hour_cos" in X.columns
+    assert "is_rush_hour" in X.columns
+    assert "PU_DO_pair" in X.columns
 
 
 def test_dropoff_information_is_not_in_features():

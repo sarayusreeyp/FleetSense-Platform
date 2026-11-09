@@ -12,6 +12,7 @@ def get_storage(
     backend: str | None = None,
     root_dir: str | None = None,
     azure_connection_string: str | None = None,
+    azure_account_url: str | None = None,
     azure_container_name: str | None = None,
 ) -> Storage:
     """
@@ -25,6 +26,8 @@ def get_storage(
         Local data directory if using local backend.
     azure_connection_string : str | None
         Azure connection string if using Azure backend.
+    azure_account_url : str | None
+        Azure Blob account URL (for DefaultAzureCredential / Managed Identity).
     azure_container_name : str | None
         Azure container name if using Azure backend.
 
@@ -50,7 +53,7 @@ def get_storage(
         raise ValueError(
             f"Local storage backend is not permitted in '{app_env}' environment. "
             f"Set FLEETSENSE_STORAGE_BACKEND=azure and configure "
-            f"AZURE_STORAGE_CONNECTION_STRING for production deployments."
+            f"AZURE_STORAGE_CONNECTION_STRING or AZURE_STORAGE_ACCOUNT_URL for production deployments."
         )
 
     if chosen_backend == "local":
@@ -67,6 +70,10 @@ def get_storage(
             or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
             or settings.storage.azure_connection_string
         )
+        acc_url = (
+            azure_account_url
+            or os.getenv("AZURE_STORAGE_ACCOUNT_URL")
+        )
         container = (
             azure_container_name
             or os.getenv("AZURE_STORAGE_CONTAINER_NAME")
@@ -75,6 +82,7 @@ def get_storage(
         )
         return AzureBlobStorage(
             connection_string=conn_str,
+            account_url=acc_url,
             container_name=container,
         )
 

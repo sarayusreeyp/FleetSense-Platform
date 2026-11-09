@@ -1,19 +1,57 @@
 from __future__ import annotations
 
+import re
+import tempfile
 from datetime import date
 from pathlib import Path
 from typing import Any
 
 from fleetsense.core.config import settings
-from fleetsense.core.constants.paths import TMP_DATA_DIR
 from fleetsense.core.logger import get_logger
 from fleetsense.etl.downloader import TLCDownloader
-from fleetsense.etl.metadata import IngestionMetadata
+from fleetsense.etl.metadata import (
+    FeaturesMetadata,
+    IngestionMetadata,
+    ProcessedMetadata,
+)
 from fleetsense.etl.validation import clean_and_filter_tlc_dataframe
 from fleetsense.storage.base import Storage
 from fleetsense.storage.factory import get_storage
 
 logger = get_logger(__name__)
+
+_FILENAME_DATE_PATTERN = re.compile(r"_(\d{4})-(\d{2})\.parquet$")
+
+
+def _parse_year_month_from_filename(filename: str) -> tuple[int, int] | None:
+    """Extract (year, month) from a standard TLC filename."""
+    match = _FILENAME_DATE_PATTERN.search(filename)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    return None
+
+
+def get_pending_unprocessed_files(
+    dataset: str = "yellow",
+    storage: Storage | None = None,
+) -> list[str]:
+    """
+    Find raw files in storage that have been downloaded but not yet cleaned/processed.
+    """
+    active_storage = storage or get_storage()
+    ingestion_meta = IngestionMetadata()
+    processed_meta = ProcessedMetadata()
+
+    raw_files = active_storage.list_files("raw")
+    pending = []
+
+    for filename in sorted(raw_files):
+        if not filename.startswith(f"{dataset}_tripdata_") or not filename.endswith(".parquet"):
+            continue
+        if not processed_meta.is_processed(filename, dataset=dataset):
+            pending.append(filename)
+
+    return pending
 
 
 def _get_latest_available_month(
@@ -22,7 +60,7 @@ def _get_latest_available_month(
     start_year: int,
     start_month: int,
 ) -> tuple[int, int] | None:
-    """Find the latest published TLC month."""
+    """Find the latest published TLC month scanning backwards from the current date."""
     today = date.today()
     year = today.year
     month = today.month
@@ -48,7 +86,28 @@ def _get_pending_months(
     latest_month: int,
     metadata: IngestionMetadata,
 ) -> list[tuple[int, int]]:
-    """Determine which available months still need ingestion."""
+    """Determine which available months still need ingestion, resuming from latest downloaded."""
+    # Check if there is already a latest downloaded file
+    latest_downloaded = metadata.get_latest_downloaded(dataset=dataset)
+    if latest_downloaded:
+        parsed = _parse_year_month_from_filename(latest_downloaded)
+        if parsed:
+            prev_year, prev_month = parsed
+            # Start from the month immediately following the latest downloaded
+            if prev_month == 12:
+                eff_start_year = prev_year + 1
+                eff_start_month = 1
+            else:
+                eff_start_year = prev_year
+                eff_start_month = prev_month + 1
+
+            # Only advance if it's forward of the configured start_year/month
+            if (eff_start_year > start_year) or (
+                eff_start_year == start_year and eff_start_month > start_month
+            ):
+                start_year = eff_start_year
+                start_month = eff_start_month
+
     pending: list[tuple[int, int]] = []
     year = start_year
     month = start_month
@@ -76,10 +135,12 @@ def run_ingestion(
 ) -> list[Path | str]:
     """
     Download and store new TLC monthly files into raw storage.
-    Uses memory-safe streaming/copying instead of loading full parquet bytes into RAM.
+    Uses memory-safe streaming and scoped temporary directory isolation.
     """
     dataset = dataset or settings.ingestion.dataset
     metadata = IngestionMetadata()
+    active_storage = storage or get_storage()
+
     downloader = TLCDownloader()
     active_storage = storage or get_storage()
 
@@ -115,49 +176,36 @@ def run_ingestion(
             metadata=metadata,
         )
 
-    TMP_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="fleetsense_download_") as scratch_dir:
+        scratch_path = Path(scratch_dir)
 
-    for current_year, current_month in months_to_process:
-        filename = (
-            f"{dataset}_tripdata_{current_year:04d}-{current_month:02d}.parquet"
-        )
+        for current_year, current_month in months_to_process:
+            filename = (
+                f"{dataset}_tripdata_{current_year:04d}-{current_month:02d}.parquet"
+            )
 
-        if metadata.is_downloaded(filename):
-            continue
+            if metadata.is_downloaded(filename):
+                continue
 
-        temporary_path = TMP_DATA_DIR / filename
-        downloaded_path: Path | None = None
+            target_scratch = scratch_path / filename
 
-        try:
             logger.info("Downloading %s ...", filename)
             downloaded_path = downloader.download(
                 dataset=dataset,
                 year=current_year,
                 month=current_month,
-                output_path=temporary_path,
+                output_path=target_scratch,
             )
 
-            # Memory-safe storage: save file path directly if supported
-            if hasattr(active_storage, "save_file"):
-                stored_path = active_storage.save_file(
-                    source_path=downloaded_path,
-                    category="raw",
-                    filename=filename,
-                )
-            else:
-                # Fallback for legacy mocks
-                stored_path = active_storage.save_raw(
-                    filename=filename,
-                    data=downloaded_path.read_bytes(),
-                )
+            stored_path = active_storage.save_file(
+                source_path=downloaded_path,
+                category="raw",
+                filename=filename,
+            )
 
             metadata.mark_downloaded(filename=filename, dataset=dataset)
             downloaded_files.append(stored_path)
             logger.info("Successfully ingested %s to %s", filename, stored_path)
-
-        finally:
-            if downloaded_path is not None and downloaded_path.exists():
-                downloaded_path.unlink()
 
     return downloaded_files
 
@@ -201,9 +249,19 @@ def clean_and_process_dataset(
             filename=filename,
         )
 
-        # Gap 2: Record successful processing in metadata state
+        # Record successful processing in metadata states (both ingestion_state and processed_state)
         dataset_name = filename.split("_")[0] if "_" in filename else "yellow"
         metadata.mark_processed(filename=filename, dataset=dataset_name, report=report)
+        try:
+            processed_meta = ProcessedMetadata()
+            processed_meta.mark_processed_file(
+                filename=filename,
+                dataset=dataset_name,
+                report=report,
+                processed_path=str(stored_path),
+            )
+        except Exception as proc_meta_err:
+            logger.warning("Could not update processed_state: %s", proc_meta_err)
 
         logger.info(
             "Successfully processed %s. Rows kept: %d / %d (%.2f%% loss). Stored at: %s",

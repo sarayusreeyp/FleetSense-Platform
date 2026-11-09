@@ -36,12 +36,15 @@ def _resolve_tracking_uri() -> str:
     )
 
     # Resolve relative SQLite URIs against PROJECT_ROOT if SQLite is explicitly provided
-    if uri.startswith("sqlite:///") and not uri.startswith("sqlite:////"):
+    if uri.startswith("sqlite:///"):
         rel_part = uri[len("sqlite:///"):]
+        # Normalize relative path if not absolute (POSIX or Windows drive)
         if not (len(rel_part) > 2 and rel_part[1] == ":") and not rel_part.startswith("/"):
             abs_db = (PROJECT_ROOT / rel_part).resolve()
             abs_db.parent.mkdir(parents=True, exist_ok=True)
-            uri = f"sqlite:///{abs_db.as_posix()}"
+            # Use 4 slashes on Windows for absolute drive path: sqlite:////C:/...
+            posix_path = abs_db.as_posix()
+            uri = f"sqlite:////{posix_path}" if not posix_path.startswith("/") else f"sqlite:///{posix_path}"
 
     env = os.getenv("ENVIRONMENT") or settings.app.environment
     allow_sqlite = os.getenv("ALLOW_SQLITE_TRACKING", "false").lower() in ("true", "1")
@@ -171,6 +174,7 @@ class MLflowTracker:
                 self.run_metadata["model_uri"] = model_info.model_uri
 
                 # Champion vs Challenger model alias resolution
+                promoted_to_champion = False
                 if alias:
                     try:
                         from mlflow.tracking import MlflowClient
@@ -228,10 +232,17 @@ class MLflowTracker:
                                 version=version_to_alias,
                             )
                             logger.info("Assigned alias '@%s' to version %s of '%s'", target_alias, version_to_alias, reg_name)
+                            if target_alias == "champion":
+                                promoted_to_champion = True
                     except Exception as alias_exc:
                         logger.warning("Could not set model registry alias: %s", alias_exc)
+                        # Default to True when registry is not managing aliases so initial run is champion
+                        promoted_to_champion = True
+                else:
+                    promoted_to_champion = True
 
-                logger.info("Successfully registered model in MLflow: %s", model_info.model_uri)
+                self.run_metadata["is_champion"] = promoted_to_champion
+                logger.info("Successfully registered model in MLflow: %s (champion=%s)", model_info.model_uri, promoted_to_champion)
                 return model_info
             except Exception as exc:
                 logger.warning("MLflow log_and_register_model failed: %s", exc)
@@ -245,13 +256,12 @@ class MLflowTracker:
             except Exception as exc:
                 logger.warning("MLflow end_run failed: %s", exc)
 
-        # Always persist run metadata to local artifacts directory
-        meta_dir = ARTIFACTS_DIR / "metadata"
-        meta_dir.mkdir(parents=True, exist_ok=True)
-        run_file = meta_dir / f"{self.run_metadata['run_name']}.json"
-
-        with run_file.open("w", encoding="utf-8") as f:
-            json.dump(self.run_metadata, f, indent=2)
-
-        logger.info("Logged run metadata to %s", run_file)
+        # If MLflow is not active, save metadata JSON to artifacts/metadata as fallback
+        if not self.enabled or not self.active_run:
+            meta_dir = ARTIFACTS_DIR / "metadata"
+            meta_dir.mkdir(parents=True, exist_ok=True)
+            run_file = meta_dir / f"{self.run_metadata['run_name']}.json"
+            with run_file.open("w", encoding="utf-8") as f:
+                json.dump(self.run_metadata, f, indent=2)
+            logger.info("Logged fallback run metadata to %s", run_file)
         return self.run_metadata

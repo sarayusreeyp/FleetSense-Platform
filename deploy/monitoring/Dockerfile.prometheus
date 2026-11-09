@@ -1,0 +1,17 @@
+FROM prom/prometheus:v2.50.0
+
+USER root
+COPY prometheus.yml* deploy/monitoring/prometheus.yml* /etc/prometheus/prometheus.yml
+COPY alert_rules.yml* deploy/monitoring/alert_rules.yml* /etc/prometheus/alert_rules.yml
+COPY docker-entrypoint.sh* deploy/monitoring/docker-entrypoint.sh* /usr/local/bin/docker-entrypoint.sh
+
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh && \
+    chmod 777 /etc/prometheus /etc/prometheus/prometheus.yml
+
+USER nobody
+EXPOSE 9090
+
+ENTRYPOINT [ "/usr/local/bin/docker-entrypoint.sh" ]
+CMD [ "--config.file=/etc/prometheus/prometheus.yml", \
+      "--storage.tsdb.path=/prometheus", \
+      "--web.enable-lifecycle" ]

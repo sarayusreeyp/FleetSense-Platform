@@ -84,8 +84,14 @@ def record_batch_predictions(
         )
 
 
-def set_model_status(loaded: bool, model_name: str = "HistGradientBoostingRegressor") -> None:
+def set_model_status(loaded: bool, model_name: str | None = None) -> None:
     """Update the model loading gauge."""
+    if model_name is None:
+        try:
+            from fleetsense.core.config import settings
+            model_name = settings.model.algorithm
+        except Exception:
+            model_name = "XGBRegressor"
     MODEL_LOAD_STATUS.labels(model_name=model_name).set(1.0 if loaded else 0.0)
 
 

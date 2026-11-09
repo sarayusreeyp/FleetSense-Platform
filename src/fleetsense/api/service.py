@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import os
 import threading
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 import joblib
+import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor
 
@@ -76,67 +78,106 @@ class PredictionService:
 
         if MLFLOW_AVAILABLE:
             tracking_uri = os.getenv("MLFLOW_TRACKING_URI") or settings.model.mlflow_tracking_uri
+            # Quick check if MLflow server is reachable before blocking startup with retries
+            mlflow_reachable = False
             if tracking_uri:
                 mlflow.set_tracking_uri(tracking_uri)
-            for uri in candidate_uris:
-                try:
-                    logger.info(
-                        "Attempting to load model from MLflow Model Registry: %s (tracking_uri=%s)...",
-                        uri,
-                        tracking_uri,
-                    )
-                    self.model = mlflow.sklearn.load_model(uri)
-                    self.model_source = f"mlflow:{uri}"
-                    # Extract MLflow lineage metadata
+                if tracking_uri.startswith(("http://", "https://")):
                     try:
-                        from mlflow.tracking import MlflowClient
-                        client = MlflowClient(tracking_uri=tracking_uri)
-                        model_name = settings.model.name
-                        alias = os.getenv("MLFLOW_MODEL_ALIAS", "champion")
+                        import urllib.request
+                        urllib.request.urlopen(f"{tracking_uri.rstrip('/')}/health", timeout=1.5)
+                        mlflow_reachable = True
+                    except Exception:
+                        logger.warning("MLflow tracking server at %s is not reachable; bypassing registry.", tracking_uri)
+                else:
+                    # SQLite or PostgreSQL database backend (MLflow handles connection directly)
+                    mlflow_reachable = True
+
+            if mlflow_reachable:
+                for uri in candidate_uris:
+                    try:
+                        logger.info(
+                            "Attempting to load model from MLflow Model Registry: %s (tracking_uri=%s)...",
+                            uri,
+                            tracking_uri,
+                        )
+                        self.model = mlflow.sklearn.load_model(uri)
+                        self.model_source = f"mlflow:{uri}"
+                        # Extract MLflow lineage metadata
                         try:
-                            mv = client.get_model_version_by_alias(model_name, alias)
-                            self.mlflow_run_id = mv.run_id
-                            self.mlflow_model_version = mv.version
+                            from mlflow.tracking import MlflowClient
+                            client = MlflowClient(tracking_uri=tracking_uri)
+                            model_name = settings.model.name
+                            alias = os.getenv("MLFLOW_MODEL_ALIAS", "champion")
+                            try:
+                                mv = client.get_model_version_by_alias(model_name, alias)
+                                self.mlflow_run_id = mv.run_id
+                                self.mlflow_model_version = mv.version
+                            except Exception:
+                                pass
                         except Exception:
                             pass
-                    except Exception:
-                        pass
-                    logger.info("Successfully loaded model from MLflow Model Registry: %s", uri)
-                    return
-                except Exception as exc:
-                    logger.info("Could not load from MLflow Model Registry (%s): %s", uri, exc)
+                        logger.info("Successfully loaded model from MLflow Model Registry: %s", uri)
+                        return
+                    except Exception as exc:
+                        logger.info("Could not load from MLflow Model Registry (%s): %s", uri, exc)
 
-        # 2. Check Azure Blob Storage for remote Champion model
+        # 2. Check Remote Cloud Storage Backend (Azure Blob Storage / S3)
         try:
             from fleetsense.storage.factory import get_storage
             active_storage = get_storage()
-            remote_model_filename = os.getenv("FLEETSENSE_REMOTE_MODEL_FILENAME", "trip_duration_model.joblib")
-            remote_category = os.getenv("FLEETSENSE_REMOTE_MODEL_CATEGORY", "models/champion")
+            configured_cat = os.getenv("FLEETSENSE_REMOTE_MODEL_CATEGORY", "models/champion")
+            target_filename = os.getenv("FLEETSENSE_REMOTE_MODEL_FILENAME", "trip_duration_model.joblib")
 
-            # Check if this remote model exists in storage
-            if hasattr(active_storage, "download_to_file") and active_storage.exists(f"{remote_category}/{remote_model_filename}"):
-                cache_dir = MODELS_DIR / "cache"
-                cache_dir.mkdir(parents=True, exist_ok=True)
-                local_cache_path = cache_dir / remote_model_filename
+            candidate_categories = [configured_cat]
+            for cat_candidate in ("champion", "models/champion", "models"):
+                if cat_candidate not in candidate_categories:
+                    candidate_categories.append(cat_candidate)
 
-                logger.info(
-                    "Downloading champion model from %s/%s to local cache %s...",
-                    remote_category,
-                    remote_model_filename,
-                    local_cache_path,
-                )
-                active_storage.download_to_file(
-                    category=remote_category,
-                    filename=remote_model_filename,
-                    destination_path=local_cache_path,
-                )
-                self.model = joblib.load(local_cache_path)
-                self.model_path = local_cache_path
-                self.model_source = f"storage:{remote_category}/{remote_model_filename}"
+            found_cat = None
+            found_file = None
+
+            # Check direct file existence
+            for cat in candidate_categories:
+                for fname in (target_filename, "trip_duration_model.joblib", "latest_model.joblib"):
+                    if hasattr(active_storage, "exists") and active_storage.exists(cat, fname):
+                        found_cat = cat
+                        found_file = fname
+                        break
+                if found_cat:
+                    break
+
+            # If not directly matched, query category file listing
+            if not found_cat and hasattr(active_storage, "list_files"):
+                for cat in candidate_categories:
+                    try:
+                        r_files = active_storage.list_files(cat)
+                        if r_files:
+                            found_cat = cat
+                            found_file = "latest_model.joblib" if "latest_model.joblib" in r_files else r_files[-1]
+                            break
+                    except Exception:
+                        pass
+
+            if found_cat and found_file and hasattr(active_storage, "download_to_file"):
+                MODELS_DIR.mkdir(parents=True, exist_ok=True)
+                cached_model_path = MODELS_DIR / found_file
+                if not cached_model_path.exists():
+                    logger.info("Downloading model '%s' from %s to %s...", found_file, found_cat, cached_model_path)
+                    active_storage.download_to_file(
+                        category=found_cat,
+                        filename=found_file,
+                        destination_path=cached_model_path,
+                    )
+                else:
+                    logger.info("Using cached model '%s' from %s", found_file, cached_model_path)
+                self.model = joblib.load(cached_model_path)
+                self.model_path = cached_model_path
+                self.model_source = f"storage:{found_cat}/{found_file}"
                 logger.info("Successfully loaded champion model from cloud storage (%s)", self.model_source)
                 return
-        except Exception as exc:
-            logger.info("Could not load model from cloud storage: %s", exc)
+        except Exception as storage_exc:
+            logger.info("Cloud storage model check skipped/failed: %s", storage_exc)
 
         # 3. Check explicit path (passed in or from FLEETSENSE_MODEL_ARTIFACT_PATH)
         if self.model_path and self.model_path.exists():
@@ -148,7 +189,7 @@ class PredictionService:
             except Exception as exc:
                 logger.warning("Failed to load model from %s: %s", self.model_path, exc)
 
-        # 3. Search local directories (prefer latest_model.joblib or most recently modified)
+        # 4. Search local directories (prefer latest_model.joblib or most recently modified)
         search_dirs = [MODELS_DIR, ARTIFACTS_DIR, DATA_DIR / "models"]
         for search_dir in search_dirs:
             if search_dir.exists():
@@ -177,29 +218,6 @@ class PredictionService:
                         return
                     except Exception as exc:
                         logger.warning("Failed loading %s: %s", latest_model, exc)
-
-        # 4. Check remote storage backend (e.g. Azure Blob Storage) for models
-        try:
-            from fleetsense.storage.factory import get_storage
-            storage = get_storage()
-            remote_models = sorted(storage.list_files("models"))
-            if remote_models:
-                MODELS_DIR.mkdir(parents=True, exist_ok=True)
-                target_model_file = "latest_model.joblib" if "latest_model.joblib" in remote_models else remote_models[-1]
-                cached_model_path = MODELS_DIR / target_model_file
-                logger.info("Downloading model '%s' from storage backend to %s...", target_model_file, cached_model_path)
-                storage.download_to_file(
-                    category="models",
-                    filename=target_model_file,
-                    destination_path=cached_model_path,
-                )
-                self.model = joblib.load(cached_model_path)
-                self.model_path = cached_model_path
-                self.model_source = f"storage:{target_model_file}"
-                logger.info("Successfully loaded model from remote storage: %s", target_model_file)
-                return
-        except Exception as storage_exc:
-            logger.debug("Storage backend model loading skipped/failed: %s", storage_exc)
 
         # 5. Dummy fallback — ONLY allowed in test environments
         if self._allow_dummy_fallback or os.getenv("FLEETSENSE_APP_ENV") in ("testing", "test"):
@@ -286,6 +304,17 @@ class PredictionService:
         records = []
         for trip in trips:
             dt = trip.pickup_datetime
+            # If timezone is provided, convert to Eastern Time (America/New_York) where TLC data originates
+            if dt.tzinfo is not None:
+                try:
+                    from zoneinfo import ZoneInfo
+                    dt = dt.astimezone(ZoneInfo("America/New_York"))
+                except Exception:
+                    # Fallback to standard Eastern Time offset (UTC-5)
+                    dt = dt.astimezone(timezone(timedelta(hours=-5)))
+
+            hour = dt.hour
+            dow = dt.weekday()
             records.append(
                 {
                     "VendorID": trip.VendorID,
@@ -293,15 +322,25 @@ class PredictionService:
                     "trip_distance": trip.trip_distance,
                     "PULocationID": trip.PULocationID,
                     "DOLocationID": trip.DOLocationID,
-                    "pickup_hour": dt.hour,
-                    "pickup_day_of_week": dt.weekday(),
+                    "pickup_hour": hour,
+                    "pickup_day_of_week": dow,
                     "pickup_month": dt.month,
                     "pickup_day": dt.day,
-                    "is_weekend": 1 if dt.weekday() >= 5 else 0,
+                    "is_weekend": 1 if dow >= 5 else 0,
+                    "pickup_hour_sin": float(np.sin(2 * np.pi * hour / 24.0)),
+                    "pickup_hour_cos": float(np.cos(2 * np.pi * hour / 24.0)),
+                    "is_rush_hour": 1 if (dow < 5 and hour in (7, 8, 9, 16, 17, 18, 19)) else 0,
+                    "PU_DO_pair": f"{trip.PULocationID}_{trip.DOLocationID}",
                 }
             )
 
         features_df = pd.DataFrame(records)
+
+        # Cast all configured categorical features to categorical dtype (matching XGBoost training schema)
+        cat_cols = getattr(settings.model, "categorical_features", []) or ["VendorID", "PULocationID", "DOLocationID", "PU_DO_pair"]
+        for col in cat_cols:
+            if col in features_df.columns:
+                features_df[col] = features_df[col].astype("category")
 
         # Dynamic feature alignment to the loaded model
         expected_features = (

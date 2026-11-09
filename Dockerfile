@@ -52,6 +52,9 @@ COPY README.md /app/README.md
 # Install package in editable mode within virtual environment
 RUN /opt/venv/bin/pip install --no-deps -e /app
 
+# Ensure proper permissions across venv and app
+RUN chown -R appuser:fleetsense /opt/venv /app
+
 # Create persistent storage directories with appropriate permissions
 RUN mkdir -p /app/artifacts/models /app/artifacts/metadata /app/data /app/logs /tmp/prometheus_multiproc && \
     chown -R appuser:fleetsense /app && \
@@ -69,5 +72,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Default command: launch Uvicorn production server
-CMD ["uvicorn", "fleetsense.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+# Default command: launch Uvicorn single-worker server (prevents state-flickering and memory duplication)
+CMD ["uvicorn", "fleetsense.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

@@ -6,10 +6,12 @@ from typing import Any, Final
 import joblib
 import pandas as pd
 from sklearn.base import RegressorMixin
+from sklearn.compose import TransformedTargetRegressor
 from sklearn.ensemble import (
     HistGradientBoostingRegressor,
     RandomForestRegressor,
 )
+import numpy as np
 
 from fleetsense.core.exceptions.data import DataValidationError
 from fleetsense.core.exceptions.ml import ModelTrainingError
@@ -52,9 +54,19 @@ def train_model(
 
     try:
         if algorithm == "HistGradientBoostingRegressor":
+            # HistGradientBoosting requires categorical features to have <= 255 categories.
+            # Filter out high-cardinality category columns like PU_DO_pair for this specific estimator.
+            eligible_X = X.copy()
+            for col in list(eligible_X.select_dtypes(include=["category", "object"]).columns):
+                if eligible_X[col].nunique() > 255:
+                    eligible_X[col] = eligible_X[col].astype("category").cat.codes
+
             cat_mask = None
             if categorical_features:
-                cat_mask = [col in categorical_features for col in X.columns]
+                cat_mask = [
+                    col in categorical_features and isinstance(eligible_X[col].dtype, pd.CategoricalDtype)
+                    for col in eligible_X.columns
+                ]
 
             model = HistGradientBoostingRegressor(
                 max_iter=n_estimators,
@@ -63,13 +75,20 @@ def train_model(
                 random_state=random_state,
                 categorical_features=cat_mask,
             )
+            X = eligible_X
         elif algorithm == "RandomForestRegressor":
+            # RandomForestRegressor does not support pandas category dtypes; convert to integer codes
+            eligible_X = X.copy()
+            for col in eligible_X.select_dtypes(include=["category", "object"]).columns:
+                eligible_X[col] = eligible_X[col].astype("category").cat.codes
+
             model = RandomForestRegressor(
                 n_estimators=n_estimators,
                 max_depth=max_depth,
                 random_state=random_state,
                 n_jobs=DEFAULT_N_JOBS,
             )
+            X = eligible_X
         elif algorithm == "XGBRegressor":
             from xgboost import XGBRegressor
 
@@ -80,15 +99,22 @@ def train_model(
                 learning_rate=learning_rate,
                 max_depth=xgb_depth,
                 random_state=random_state,
-                n_jobs=DEFAULT_N_JOBS,
+                n_jobs=4,
                 tree_method="hist",
+                max_bin=128,
                 enable_categorical=True,
             )
         else:
             raise ValueError(f"Unsupported regression algorithm: '{algorithm}'")
 
-        model.fit(X, y)
-        return model
+        # Automatically wrap with TransformedTargetRegressor for log1p target optimization
+        regressor = TransformedTargetRegressor(
+            regressor=model,
+            func=np.log1p,
+            inverse_func=np.expm1,
+        )
+        regressor.fit(X, y)
+        return regressor
 
     except Exception as exc:
         if isinstance(exc, (DataValidationError, ValueError)):
@@ -152,8 +178,9 @@ def _validate_training_data(
         )
 
     if not all(
-        pd.api.types.is_numeric_dtype(dtype) for dtype in features.dtypes
+        pd.api.types.is_numeric_dtype(dtype) or isinstance(dtype, pd.CategoricalDtype)
+        for dtype in features.dtypes
     ):
         raise DataValidationError(
-            message="All training features must be numeric."
+            message="All training features must be numeric or categorical."
         )

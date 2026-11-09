@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <title>FleetSense - Taxi Trip Duration Predictor</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+            }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col font-sans antialiased">
+
+  <!-- Header -->
+  <header class="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-500/30">
+          FS
+        </div>
+        <div>
+          <h1 class="text-base font-bold text-white">FleetSense</h1>
+          <p class="text-xs text-slate-400">Taxi Transit Time Estimator</p>
+        </div>
+      </div>
+
+      <!-- Navigation Tabs (Single vs Batch) -->
+      <nav class="flex space-x-1 bg-slate-800 p-1 rounded-xl border border-slate-700 text-xs">
+        <button id="tab-btn-single" class="px-3.5 py-1.5 rounded-lg font-medium transition bg-indigo-600 text-white shadow">
+          Single Trip
+        </button>
+        <button id="tab-btn-batch" class="px-3.5 py-1.5 rounded-lg font-medium transition text-slate-400 hover:text-white">
+          Batch Trips
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Main Content Area -->
+  <main class="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+
+    <!-- 1. Single Trip Section -->
+    <div id="section-single" class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+      
+      <!-- Input Form (7 cols) -->
+      <div class="lg:col-span-7 bg-slate-800/80 border border-slate-700/80 rounded-2xl p-6 shadow-xl">
+        <div class="flex items-center justify-between mb-5 pb-3 border-b border-slate-700">
+          <div>
+            <h2 class="text-base font-semibold text-white">Trip Details</h2>
+            <p class="text-xs text-slate-400">Enter route and schedule details</p>
+          </div>
+          <button type="button" id="btn-fill-sample" class="text-xs text-indigo-400 hover:text-indigo-300 font-medium">
+            Fill Sample Route
+          </button>
+        </div>
+
+        <form id="single-form" class="space-y-4">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-medium text-slate-300 mb-1">Pickup Location ID (1 - 265)</label>
+              <input type="number" id="PULocationID" min="1" max="265" value="161" required
+                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-300 mb-1">Dropoff Location ID (1 - 265)</label>
+              <input type="number" id="DOLocationID" min="1" max="265" value="237" required
+                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500">
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-medium text-slate-300 mb-1">Trip Distance (miles)</label>
+              <input type="number" id="trip_distance" step="0.1" min="0.1" value="3.2" required
+                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-300 mb-1">Passenger Count</label>
+              <input type="number" id="passenger_count" min="1" max="8" value="1" required
+                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500">
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-medium text-slate-300 mb-1">Pickup Hour (0 - 23)</label>
+              <input type="number" id="pickup_hour" min="0" max="23" value="17" required
+                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-300 mb-1">Day of Week (0=Mon ... 6=Sun)</label>
+              <input type="number" id="pickup_dayofweek" min="0" max="6" value="4" required
+                class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500">
+            </div>
+          </div>
+
+          <button type="submit" id="btn-predict-single"
+            class="w-full mt-4 py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg shadow-lg shadow-indigo-600/30 transition text-sm">
+            Estimate Trip Duration
+          </button>
+        </form>
+      </div>
+
+      <!-- Result Card (5 cols) -->
+      <div class="lg:col-span-5 bg-slate-800/80 border border-slate-700/80 rounded-2xl p-6 shadow-xl flex flex-col justify-between">
+        <div>
+          <h2 class="text-base font-semibold text-white mb-1">Estimated Travel Time</h2>
+          <p class="text-xs text-slate-400 mb-6">AI predicted duration for this route</p>
+
+          <div id="single-placeholder" class="py-16 text-center text-slate-500">
+            <svg class="w-12 h-12 mx-auto mb-2 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+            <p class="text-xs">Fill in parameters and click Estimate to get the transit duration.</p>
+          </div>
+
+          <div id="single-loading" class="hidden py-16 text-center">
+            <div class="w-10 h-10 border-4 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin mx-auto mb-3"></div>
+            <p class="text-xs text-slate-400">Calculating estimated time...</p>
+          </div>
+
+          <div id="single-result" class="hidden">
+            <div class="bg-indigo-950/40 border border-indigo-800/60 rounded-xl p-6 text-center mb-4">
+              <span class="text-xs font-semibold text-indigo-400 uppercase tracking-wider">Estimated Transit Duration</span>
+              <div class="flex items-baseline justify-center space-x-2 my-2">
+                <span id="single-minutes" class="text-5xl font-extrabold text-white">--</span>
+                <span class="text-lg text-indigo-300 font-medium">min</span>
+              </div>
+            </div>
+
+            <div class="text-xs text-slate-400 space-y-1">
+              <div class="flex justify-between">
+                <span>Trip Distance:</span>
+                <span id="res-distance" class="text-slate-200">-- miles</span>
+              </div>
+              <div class="flex justify-between">
+                <span>Route:</span>
+                <span id="res-route" class="text-slate-200">Zone -- to --</span>
+              </div>
+            </div>
+          </div>
+
+          <div id="single-error" class="hidden mt-4 p-3 bg-rose-950/50 border border-rose-800 rounded-lg text-rose-300 text-xs">
+            <p id="single-error-text">Failed to fetch duration.</p>
+          </div>
+        </div>
+
+        <p class="text-[11px] text-slate-500 text-center mt-6">
+          Estimates are based on historical NYC taxi traffic patterns.
+        </p>
+      </div>
+
+    </div>
+
+    <!-- 2. Batch Trips Section (Hidden by default) -->
+    <div id="section-batch" class="hidden max-w-4xl mx-auto bg-slate-800/80 border border-slate-700/80 rounded-2xl p-6 shadow-xl">
+      <div class="flex items-center justify-between mb-4 pb-3 border-b border-slate-700">
+        <div>
+          <h2 class="text-base font-semibold text-white">Batch Trip Prediction</h2>
+          <p class="text-xs text-slate-400">Submit multiple trips in JSON format to predict all at once</p>
+        </div>
+        <button type="button" id="btn-load-sample-batch" class="text-xs text-indigo-400 hover:text-indigo-300 font-medium">
+          Load Sample Batch JSON
+        </button>
+      </div>
+
+      <div class="space-y-4">
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Trips Payload (JSON Array)</label>
+          <textarea id="batch-input" rows="7"
+            class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-xs font-mono text-white focus:outline-none focus:border-indigo-500"></textarea>
+        </div>
+
+        <button type="button" id="btn-predict-batch"
+          class="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg shadow-lg shadow-indigo-600/30 transition text-sm">
+          Run Batch Prediction
+        </button>
+
+        <div id="batch-loading" class="hidden py-8 text-center">
+          <div class="w-8 h-8 border-4 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin mx-auto mb-2"></div>
+          <p class="text-xs text-slate-400">Processing batch trips...</p>
+        </div>
+
+        <div id="batch-error" class="hidden p-3 bg-rose-950/50 border border-rose-800 rounded-lg text-rose-300 text-xs">
+          <p id="batch-error-text">Failed to process batch.</p>
+        </div>
+
+        <div id="batch-result" class="hidden space-y-2">
+          <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
+            <span>Results (<span id="batch-count">0</span> trips):</span>
+          </div>
+          <div class="overflow-x-auto rounded-lg border border-slate-700">
+            <table class="w-full text-left text-xs text-slate-300">
+              <thead class="bg-slate-900 text-slate-400 uppercase text-[10px]">
+                <tr>
+                  <th class="px-4 py-2">#</th>
+                  <th class="px-4 py-2">PULocationID</th>
+                  <th class="px-4 py-2">DOLocationID</th>
+                  <th class="px-4 py-2">Distance (mi)</th>
+                  <th class="px-4 py-2">Predicted Duration</th>
+                </tr>
+              </thead>
+              <tbody id="batch-table-body" class="divide-y divide-slate-800">
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <footer class="border-t border-slate-800 bg-slate-900/60 py-4 text-center text-xs text-slate-500">
+    FleetSense AI Platform
+  </footer>
+
+  <script>
+    // Inline Client Script - Eliminates all external file caching issues permanently
+    function getApiBaseUrl() {
+      if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+        return "http://localhost:8000";
+      }
+      const currentHost = window.location.host;
+      if (currentHost.includes("fleetsense-frontend")) {
+        const apiHost = currentHost.replace("fleetsense-frontend", "fleetsense-api");
+        return window.location.protocol + "//" + apiHost;
+      }
+      return "";
+    }
+
+    const apiBaseUrl = getApiBaseUrl();
+
+    // Tabs
+    const tabBtnSingle = document.getElementById("tab-btn-single");
+    const tabBtnBatch = document.getElementById("tab-btn-batch");
+    const sectionSingle = document.getElementById("section-single");
+    const sectionBatch = document.getElementById("section-batch");
+
+    tabBtnSingle.addEventListener("click", () => {
+      tabBtnSingle.className = "px-3.5 py-1.5 rounded-lg font-medium transition bg-indigo-600 text-white shadow";
+      tabBtnBatch.className = "px-3.5 py-1.5 rounded-lg font-medium transition text-slate-400 hover:text-white";
+      sectionSingle.classList.remove("hidden");
+      sectionBatch.classList.add("hidden");
+    });
+
+    tabBtnBatch.addEventListener("click", () => {
+      tabBtnBatch.className = "px-3.5 py-1.5 rounded-lg font-medium transition bg-indigo-600 text-white shadow";
+      tabBtnSingle.className = "px-3.5 py-1.5 rounded-lg font-medium transition text-slate-400 hover:text-white";
+      sectionBatch.classList.remove("hidden");
+      sectionSingle.classList.add("hidden");
+    });
+
+    // Single Prediction Elements
+    const singleForm = document.getElementById("single-form");
+    const btnFillSample = document.getElementById("btn-fill-sample");
+    const btnPredictSingle = document.getElementById("btn-predict-single");
+    const singlePlaceholder = document.getElementById("single-placeholder");
+    const singleLoading = document.getElementById("single-loading");
+    const singleResult = document.getElementById("single-result");
+    const singleError = document.getElementById("single-error");
+    const singleErrorText = document.getElementById("single-error-text");
+    const singleMinutes = document.getElementById("single-minutes");
+    const resDistance = document.getElementById("res-distance");
+    const resRoute = document.getElementById("res-route");
+
+    btnFillSample.addEventListener("click", () => {
+      document.getElementById("PULocationID").value = 161;
+      document.getElementById("DOLocationID").value = 237;
+      document.getElementById("trip_distance").value = 3.2;
+      document.getElementById("passenger_count").value = 1;
+      document.getElementById("pickup_hour").value = 17;
+      document.getElementById("pickup_dayofweek").value = 4;
+    });
+
+    function computePickupDatetime(pickupHour, pickupDayOfWeek) {
+      const d = new Date();
+      const currentDay = (d.getDay() + 6) % 7;
+      let diff = pickupDayOfWeek - currentDay;
+      d.setDate(d.getDate() + diff);
+      d.setHours(pickupHour, 0, 0, 0);
+      return d.toISOString();
+    }
+
+    function formatErrorMessage(errData) {
+      if (!errData) return "Request failed.";
+      if (typeof errData === "string") return errData;
+      if (errData.detail) {
+        if (typeof errData.detail === "string") return errData.detail;
+        if (Array.isArray(errData.detail)) {
+          return errData.detail.map(item => (item.loc ? item.loc.join(".") + ": " : "") + item.msg).join(" | ");
+        }
+        return JSON.stringify(errData.detail);
+      }
+      if (errData.message) return errData.message;
+      return JSON.stringify(errData);
+    }
+
+    singleForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+
+      const pu = parseInt(document.getElementById("PULocationID").value, 10);
+      const do_loc = parseInt(document.getElementById("DOLocationID").value, 10);
+      const dist = parseFloat(document.getElementById("trip_distance").value);
+      const hour = parseInt(document.getElementById("pickup_hour").value, 10);
+      const day = parseInt(document.getElementById("pickup_dayofweek").value, 10);
+
+      const payload = {
+        VendorID: 1,
+        pickup_datetime: computePickupDatetime(hour, day),
+        PULocationID: pu,
+        DOLocationID: do_loc,
+        trip_distance: dist,
+        passenger_count: parseInt(document.getElementById("passenger_count").value, 10)
+      };
+
+      singlePlaceholder.classList.add("hidden");
+      singleResult.classList.add("hidden");
+      singleError.classList.add("hidden");
+      singleLoading.classList.remove("hidden");
+      btnPredictSingle.disabled = true;
+
+      try {
+        const res = await fetch(apiBaseUrl + "/predict", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({ detail: "HTTP " + res.status }));
+          throw new Error(formatErrorMessage(errData));
+        }
+
+        const data = await res.json();
+        const duration = data.predicted_duration_minutes != null 
+          ? data.predicted_duration_minutes 
+          : (data.prediction_minutes != null ? data.prediction_minutes : null);
+
+        singleMinutes.textContent = duration != null ? duration.toFixed(1) : "--";
+        resDistance.textContent = dist.toFixed(1) + " miles";
+        resRoute.textContent = "Zone " + pu + " to Zone " + do_loc;
+
+        singleLoading.classList.add("hidden");
+        singleResult.classList.remove("hidden");
+      } catch (err) {
+        singleLoading.classList.add("hidden");
+        singleError.classList.remove("hidden");
+        singleErrorText.textContent = err.message || "Failed to make prediction.";
+      } finally {
+        btnPredictSingle.disabled = false;
+      }
+    });
+
+    // Batch Prediction Elements
+    const batchInput = document.getElementById("batch-input");
+    const btnLoadSampleBatch = document.getElementById("btn-load-sample-batch");
+    const btnPredictBatch = document.getElementById("btn-predict-batch");
+    const batchLoading = document.getElementById("batch-loading");
+    const batchError = document.getElementById("batch-error");
+    const batchErrorText = document.getElementById("batch-error-text");
+    const batchResult = document.getElementById("batch-result");
+    const batchTableBody = document.getElementById("batch-table-body");
+    const batchCount = document.getElementById("batch-count");
+
+    const nowIso = new Date().toISOString();
+    const sampleBatchData = [
+      { "VendorID": 1, "pickup_datetime": nowIso, "PULocationID": 161, "DOLocationID": 237, "trip_distance": 2.5, "passenger_count": 1 },
+      { "VendorID": 1, "pickup_datetime": nowIso, "PULocationID": 79, "DOLocationID": 142, "trip_distance": 4.8, "passenger_count": 2 },
+      { "VendorID": 1, "pickup_datetime": nowIso, "PULocationID": 138, "DOLocationID": 230, "trip_distance": 9.2, "passenger_count": 1 }
+    ];
+
+    btnLoadSampleBatch.addEventListener("click", () => {
+      batchInput.value = JSON.stringify(sampleBatchData, null, 2);
+    });
+    batchInput.value = JSON.stringify(sampleBatchData, null, 2);
+
+    btnPredictBatch.addEventListener("click", async () => {
+      let parsedPayload;
+      try {
+        parsedPayload = JSON.parse(batchInput.value);
+        if (!Array.isArray(parsedPayload)) {
+          throw new Error("Batch data must be a JSON array of trips.");
+        }
+      } catch (err) {
+        batchError.classList.remove("hidden");
+        batchErrorText.textContent = "Invalid JSON: " + err.message;
+        return;
+      }
+
+      batchError.classList.add("hidden");
+      batchResult.classList.add("hidden");
+      batchLoading.classList.remove("hidden");
+      btnPredictBatch.disabled = true;
+
+      try {
+        const res = await fetch(apiBaseUrl + "/predict/batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ trips: parsedPayload }),
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({ detail: "HTTP " + res.status }));
+          throw new Error(formatErrorMessage(errData));
+        }
+
+        const data = await res.json();
+        const predictions = data.predictions || [];
+
+        batchTableBody.innerHTML = "";
+        predictions.forEach((item, idx) => {
+          const original = parsedPayload[idx] || {};
+          const duration = item.predicted_duration_minutes != null 
+            ? item.predicted_duration_minutes 
+            : (item.prediction_minutes != null ? item.prediction_minutes : null);
+
+          const row = document.createElement("tr");
+          row.className = "hover:bg-slate-800/50";
+          row.innerHTML = `
+            <td class="px-4 py-2 font-mono text-slate-400">${idx + 1}</td>
+            <td class="px-4 py-2 font-mono">${original.PULocationID ?? "--"}</td>
+            <td class="px-4 py-2 font-mono">${original.DOLocationID ?? "--"}</td>
+            <td class="px-4 py-2 font-mono">${original.trip_distance ?? "--"}</td>
+            <td class="px-4 py-2 font-bold text-indigo-400">${duration != null ? duration.toFixed(1) + " min" : "--"}</td>
+          `;
+          batchTableBody.appendChild(row);
+        });
+
+        batchCount.textContent = predictions.length;
+        batchLoading.classList.add("hidden");
+        batchResult.classList.remove("hidden");
+      } catch (err) {
+        batchLoading.classList.add("hidden");
+        batchError.classList.remove("hidden");
+        batchErrorText.textContent = err.message || "Failed to process batch.";
+      } finally {
+        btnPredictBatch.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

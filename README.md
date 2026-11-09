@@ -225,12 +225,6 @@ chmod +x deploy/azure/deploy.sh
 ./deploy/azure/deploy.sh
 ```
 
-### Deploy to AWS App Runner:
-```bash
-chmod +x deploy/aws/deploy.sh
-./deploy/aws/deploy.sh
-```
-
 ---
 
 ## 🧪 Testing

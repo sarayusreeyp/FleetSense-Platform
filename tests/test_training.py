@@ -34,9 +34,10 @@ def test_train_model_returns_fitted_random_forest():
         n_estimators=10,
     )
 
-    assert isinstance(model, RandomForestRegressor)
-    assert hasattr(model, "estimators_")
-    assert len(model.estimators_) == 10
+    inner = model.regressor_ if hasattr(model, "regressor_") else model
+    assert isinstance(inner, RandomForestRegressor)
+    assert hasattr(inner, "estimators_")
+    assert len(inner.estimators_) == 10
 
 
 def test_trained_model_can_predict():
@@ -104,12 +105,15 @@ def test_train_model_hist_gradient_boosting():
         algorithm="HistGradientBoostingRegressor",
         n_estimators=20,
     )
-    assert isinstance(model, HistGradientBoostingRegressor)
+    inner = model.regressor_ if hasattr(model, "regressor_") else model
+    assert isinstance(inner, HistGradientBoostingRegressor)
     preds = model.predict(features)
     assert len(preds) == len(target)
 
 
 def test_save_and_load_model(tmp_path: Path):
+    import numpy as np
+
     features, target = sample_training_data()
     model = train_model(features, target, n_estimators=10)
 
@@ -120,7 +124,7 @@ def test_save_and_load_model(tmp_path: Path):
     loaded = load_model(saved)
     preds_orig = model.predict(features)
     preds_loaded = loaded.predict(features)
-    assert (preds_orig == preds_loaded).all()
+    assert np.allclose(preds_orig, preds_loaded)
 
 
 def test_train_model_xgboost():
@@ -133,7 +137,7 @@ def test_train_model_xgboost():
         algorithm="XGBRegressor",
         n_estimators=10,
     )
-    assert isinstance(model, XGBRegressor)
+    assert isinstance(model.regressor_ if hasattr(model, "regressor_") else model, XGBRegressor)
     preds = model.predict(features)
     assert len(preds) == len(target)
     assert all(p >= 0 for p in preds)

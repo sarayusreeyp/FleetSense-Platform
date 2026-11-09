@@ -166,11 +166,11 @@ def clean_and_filter_tlc_dataframe(
     df["tpep_dropoff_datetime"] = pd.to_datetime(df["tpep_dropoff_datetime"], errors="coerce")
     valid_timestamps = df["tpep_pickup_datetime"].notna() & df["tpep_dropoff_datetime"].notna()
 
-    # 2. Chronological sequence and duration limits (1 minute to 24 hours)
+    # 2. Chronological sequence and duration limits (1 minute to 180 minutes / 3 hours)
     duration_minutes = (
         df["tpep_dropoff_datetime"] - df["tpep_pickup_datetime"]
     ).dt.total_seconds() / 60.0
-    valid_duration = (duration_minutes >= 1.0) & (duration_minutes <= 1440.0)
+    valid_duration = (duration_minutes >= 1.0) & (duration_minutes <= 180.0)
 
     # 3. Distance bounds (0.01 to 100 miles, aligned with TRIP_DISTANCE_MAX)
     trip_dist = pd.to_numeric(df["trip_distance"], errors="coerce")

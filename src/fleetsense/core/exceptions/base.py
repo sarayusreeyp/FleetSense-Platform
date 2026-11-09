@@ -35,8 +35,6 @@ class FleetSenseError(Exception):
         super().__init__(message)
 
     def __str__(self) -> str:
-        return (
-            f"[{self.error_code}] "
-            f"{self.message} "
-            f"{self.details}"
-        )
+        if self.details:
+            return f"[{self.error_code}] {self.message} {self.details}"
+        return f"[{self.error_code}] {self.message}"

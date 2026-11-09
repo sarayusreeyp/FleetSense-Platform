@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+import io
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 if TYPE_CHECKING:
     import pandas as pd
+
+CANONICAL_STORAGE_CATEGORIES: tuple[str, ...] = (
+    "raw",
+    "processed",
+    "features",
+    "models",
+    "metadata",
+    "tmp",
+)
 
 
 class Storage(ABC):
@@ -31,7 +41,7 @@ class Storage(ABC):
         source_path : Path | str
             Local path to the source file.
         category : str
-            Storage category: 'raw', 'processed', 'features', 'models', etc.
+            Storage category: 'raw', 'processed', 'features', 'models', 'metadata', 'tmp'.
         filename : str | None
             Optional target filename. Defaults to source_path.name.
 
@@ -123,8 +133,16 @@ class Storage(ABC):
         pass
 
     @abstractmethod
-    def exists(self, relative_path: str) -> bool:
-        """Check whether a file exists."""
+    def exists(self, relative_path: str, filename: str | None = None) -> bool:
+        """Check whether a file exists.
+
+        Parameters
+        ----------
+        relative_path : str
+            Relative path or storage category (e.g. 'models/latest.joblib' or 'models').
+        filename : str | None
+            Optional filename when relative_path is a category name.
+        """
         pass
 
     @abstractmethod

@@ -1,5 +1,6 @@
 from typing import Final
 
+import numpy as np
 import pandas as pd
 
 from fleetsense.core.exceptions.data import DataValidationError
@@ -66,6 +67,12 @@ def create_features(
 
     _validate_target(data[TARGET_COLUMN])
 
+    # Filter out anomalous trip durations and non-physical speeds
+    valid_duration = (data[TARGET_COLUMN] >= 1.0) & (data[TARGET_COLUMN] <= 180.0)
+    mph = data["trip_distance"] / (data[TARGET_COLUMN] / 60.0)
+    valid_speed = (mph <= 75.0) & ((data[TARGET_COLUMN] <= 15.0) | (mph >= 1.0))
+    data = data[valid_duration & valid_speed].copy()
+
     pickup = data["tpep_pickup_datetime"]
 
     data["pickup_hour"] = pickup.dt.hour
@@ -75,6 +82,18 @@ def create_features(
     data["is_weekend"] = (
         pickup.dt.dayofweek >= 5
     ).astype(int)
+
+    # Cyclical hour encoding and route interactions
+    data["pickup_hour_sin"] = np.sin(2 * np.pi * data["pickup_hour"] / 24.0)
+    data["pickup_hour_cos"] = np.cos(2 * np.pi * data["pickup_hour"] / 24.0)
+    data["is_rush_hour"] = (
+        (data["pickup_day_of_week"] < 5)
+        & (data["pickup_hour"].isin([7, 8, 9, 16, 17, 18, 19]))
+    ).astype(int)
+    # High-cardinality zone pair: represented as category for tree methods that support categorical
+    data["PU_DO_pair"] = (
+        data["PULocationID"].astype(str) + "_" + data["DOLocationID"].astype(str)
+    ).astype("category")
 
     feature_columns = [
         "VendorID",
@@ -87,6 +106,10 @@ def create_features(
         "pickup_month",
         "pickup_day",
         "is_weekend",
+        "pickup_hour_sin",
+        "pickup_hour_cos",
+        "is_rush_hour",
+        "PU_DO_pair",
     ]
 
     available_features = [
@@ -150,12 +173,12 @@ def _validate_target(
             )
         )
 
-    # A 24-hour taxi trip is treated as invalid data.
-    if (target > 24 * 60).any():
+    # Maximum allowed trip duration is 3 hours (180 mins)
+    if (target > 180.0).any():
         raise DataValidationError(
             message=(
                 "Trip duration exceeds the maximum "
-                "allowed duration of 24 hours."
+                "allowed duration of 180 minutes."
             )
         )
 

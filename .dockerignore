@@ -1,0 +1,27 @@
+.git
+.github
+.venv
+venv
+ENV
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.ruff_cache
+htmlcov
+.coverage
+
+# Exclude large local data and artifacts from Docker context
+data/
+artifacts/
+logs/
+notebooks/
+mlruns/
+mlflow.db
+metadata/*.json
+
+# Exclude build junk
+build/
+dist/
+*.egg-info/

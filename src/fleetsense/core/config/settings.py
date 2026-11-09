@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class AppConfig(BaseModel):
     name: str = "FleetSense"
     version: str = "0.1.0"
-    environment: str = "development"
+    environment: Literal["development", "staging", "production", "test"] = "development"
 
 
 class DataConfig(BaseModel):
@@ -19,9 +19,9 @@ class DataConfig(BaseModel):
 
 class APIConfig(BaseModel):
     host: str = "0.0.0.0"
-    port: int = 8000
-    timeout: int = 30
-    retry_attempts: int = 3
+    port: int = Field(default=8000, ge=1, le=65535)
+    timeout: int = Field(default=30, gt=0)
+    retry_attempts: int = Field(default=3, ge=0)
 
 
 class LoggingConfig(BaseModel):
@@ -29,7 +29,7 @@ class LoggingConfig(BaseModel):
 
 
 class StorageSettings(BaseModel):
-    backend: str = "local"
+    backend: Literal["local", "azure"] = "local"
     local_data_dir: str = "data"
     azure_container_name: str = "fleetsense-data"
     azure_connection_string: str = ""
@@ -38,7 +38,7 @@ class StorageSettings(BaseModel):
 class IngestionConfig(BaseModel):
     dataset: str = "yellow"
     start_year: int = 2026
-    start_month: int = 1
+    start_month: int = Field(default=1, ge=1, le=12)
 
 
 class QualityGateConfig(BaseModel):
@@ -83,7 +83,9 @@ class ModelConfig(BaseModel):
     random_state: int = 42
     n_estimators: int = 100
     learning_rate: float = 0.1
-    max_depth: int | None = 15
+    max_depth: int | None = 6
+    subsample_size: int | None = 2000000
+    max_history_months: int = Field(default=12, ge=1, description="Number of rolling historical months to load for training.")
     train_ratio: float = 0.70
     validation_ratio: float = 0.15
     test_ratio: float = 0.15
@@ -100,6 +102,16 @@ class ModelConfig(BaseModel):
     # Real-time Drift Detection PSI Thresholds
     drift_warning_threshold: float = 0.10
     drift_alert_threshold: float = 0.20
+
+    @model_validator(mode="after")
+    def validate_ratios(self) -> ModelConfig:
+        total = round(self.train_ratio + self.validation_ratio + self.test_ratio, 5)
+        if total != 1.0:
+            raise ValueError(
+                f"train_ratio ({self.train_ratio}) + validation_ratio ({self.validation_ratio}) "
+                f"+ test_ratio ({self.test_ratio}) must sum to 1.0 (got {total})"
+            )
+        return self
 
     @property
     def quality_gate_max_mae(self) -> float | None:

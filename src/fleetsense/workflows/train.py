@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -23,13 +25,14 @@ logger = get_logger(__name__)
 def load_features_task(
     filename: str | None = None,
     use_all_months: bool = True,
-    max_history_months: int = 18,
+    max_history_months: int | None = None,
 ) -> tuple[Any, Any, str, Any]:
     """Load feature matrices from storage using a rolling window and column projection.
 
-    - When ``use_all_months=True``, selects up to the most recent ``max_history_months`` (default 18).
+    - When ``use_all_months=True``, selects up to the most recent ``max_history_months`` (defaults to config setting).
     - Only reads required feature and target columns via PyArrow projection to conserve RAM.
     """
+    effective_history = max_history_months or getattr(settings.model, "max_history_months", 12)
     storage = get_storage()
     available = sorted([f for f in storage.list_files("features") if f.endswith(".parquet")])
 
@@ -42,11 +45,11 @@ def load_features_task(
         target_files = [filename]
         logger.info("Loading single feature dataset: %s", filename)
     elif use_all_months:
-        # Rolling 18-month window: take the most recent max_history_months
-        target_files = available[-max_history_months:]
+        # Rolling window: take the most recent effective_history months
+        target_files = available[-effective_history:]
         logger.info(
             "Loading rolling %d-month window (%d file(s) of %d available): %s",
-            max_history_months,
+            effective_history,
             len(target_files),
             len(available),
             target_files,
@@ -56,20 +59,22 @@ def load_features_task(
         logger.info("Loading latest feature dataset: %s", target_files[0])
 
     # Memory Safety: project only required columns
-    needed_columns = list(
-        set(
-            settings.model.features
-            + [TARGET_COLUMN, "pickup_datetime", "tpep_pickup_datetime"]
-        )
-    )
+    configured_features = list(settings.model.features) + [TARGET_COLUMN]
 
     frames: list[pd.DataFrame] = []
     for fname in target_files:
-        df = storage.load_dataframe(category="features", filename=fname, columns=needed_columns)
+        try:
+            # Memory-safe loading: project configured features + pickup timestamp directly via storage abstraction
+            cols_to_load = configured_features + ["pickup_datetime", "tpep_pickup_datetime"]
+            df = storage.load_dataframe(category="features", filename=fname, columns=cols_to_load)
+        except Exception as load_err:
+            logger.debug("Column-projected load failed (%s); loading full dataframe: %s", fname, load_err)
+            df = storage.load_dataframe(category="features", filename=fname)
+
         if TARGET_COLUMN not in df.columns:
             raise ValueError(f"Target column '{TARGET_COLUMN}' missing from {fname}.")
         frames.append(df)
-        logger.info("Loaded %d rows from %s (projected columns: %d)", len(df), fname, len(df.columns))
+        logger.info("Loaded %d rows from %s (columns: %d)", len(df), fname, len(df.columns))
 
     combined = pd.concat(frames, ignore_index=True)
     logger.info(
@@ -96,6 +101,13 @@ def load_features_task(
 
     X = combined.drop(columns=[TARGET_COLUMN])
     y = combined[TARGET_COLUMN]
+
+    # Ensure configured categorical features have categorical dtype
+    cat_cols = getattr(settings.model, "categorical_features", []) or []
+    for col in cat_cols:
+        if col in X.columns and not isinstance(X[col].dtype, pd.CategoricalDtype):
+            X[col] = X[col].astype("category")
+
     return X, y, dataset_label, date_series
 
 
@@ -143,6 +155,8 @@ def train_model_task(
     algo = algorithm or settings.model.algorithm
     logger.info("Training model using algorithm: %s on %d rows", algo, len(X_train))
 
+    subsample_limit = getattr(settings.model, "subsample_size", None)
+
     return train_model(
         features=X_train,
         target=y_train,
@@ -152,6 +166,7 @@ def train_model_task(
         max_depth=settings.model.max_depth,
         random_state=settings.model.random_state,
         categorical_features=settings.model.categorical_features,
+        subsample_size=subsample_limit,
     )
 
 
@@ -293,15 +308,6 @@ def persist_and_track_task(
     ref_features = full_X if full_X is not None else sample_X
     _export_reference_distribution(ref_features, tracker)
 
-    # Persist model artifacts to storage backend (e.g. Azure Blob or Local)
-    try:
-        storage = get_storage()
-        storage.save_file(local_model_path, category="models", filename=model_name)
-        storage.save_file(latest_model_path, category="models", filename="latest_model.joblib")
-        logger.info("Persisted model artifacts to storage backend under category='models'")
-    except Exception as store_err:
-        logger.warning("Storage backend model persist failed (non-critical): %s", store_err)
-
     # Register the model in MLflow Model Registry with Champion vs Challenger comparison
     val_mae = metrics.get("validation", {}).get("mae")
     reg_result = tracker.log_and_register_model(
@@ -317,8 +323,18 @@ def persist_and_track_task(
     )
     logger.info("Model registration completed: %s", reg_result)
 
+    # Production Champion management in Azure Blob / Storage backend
+    is_champion = tracker.run_metadata.get("is_champion", True)
+    _manage_storage_champion_artifacts(
+        model_name=model_name,
+        local_model_path=local_model_path,
+        latest_model_path=latest_model_path,
+        is_champion=is_champion,
+    )
+
     # Automate Post-Promotion API Reload if newly trained model was promoted or registered
-    _trigger_api_reload()
+    if is_champion:
+        _trigger_api_reload()
 
     run_info = tracker.end_run()
     return {
@@ -329,19 +345,105 @@ def persist_and_track_task(
     }
 
 
+def _manage_storage_champion_artifacts(
+    model_name: str,
+    local_model_path: Path,
+    latest_model_path: Path,
+    is_champion: bool,
+) -> None:
+    """Manage model artifacts in storage backend, keeping only the champion model in production storage.
+
+    When the newly trained model beats the current champion:
+    - Existing champion model blobs are archived to 'models/archive/'.
+    - Existing champion model blobs are removed from 'models/champion/' (and 'models/').
+    - The new champion model is uploaded to 'models/champion/' and 'models/latest_model.joblib'.
+    """
+    try:
+        storage = get_storage()
+        backend = (
+            os.getenv("FLEETSENSE_STORAGE_BACKEND")
+            or os.getenv("STORAGE_BACKEND")
+            or getattr(getattr(settings, "storage", None), "backend", "local")
+        ).lower()
+
+        if backend == "azure":
+            category = os.getenv("FLEETSENSE_REMOTE_MODEL_CATEGORY", "models/champion")
+
+            if not is_champion:
+                logger.info(
+                    "Model %s did not beat current champion. Skipping upload to production Azure champion blob.",
+                    model_name,
+                )
+                return
+
+            # Moving existing champion model(s) to archive in Azure Blob Storage
+            existing_models = storage.list_files(category)
+            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            for old_file in existing_models:
+                if old_file.endswith(".joblib") and not old_file.startswith("archive"):
+                    try:
+                        archived_filename = f"archive/{Path(old_file).stem}_{ts}.joblib"
+                        logger.info("Archiving previous Azure champion model: %s/%s -> %s/%s", category, old_file, category, archived_filename)
+                        if hasattr(storage, "container_client"):
+                            source_blob_url = f"{storage.container_client.url}/{category}/{old_file}"
+                            archive_blob = storage.container_client.get_blob_client(f"{category}/{archived_filename}")
+                            archive_blob.start_copy_from_url(source_blob_url)
+                        storage.delete(category, old_file)
+                    except Exception as arch_err:
+                        logger.warning("Failed archiving previous champion %s: %s", old_file, arch_err)
+
+            # Upload the new champion model artifact expected by inference service
+            storage.save_file(local_model_path, category=category, filename="trip_duration_model.joblib")
+            storage.save_file(local_model_path, category=category, filename="latest_model.joblib")
+            logger.info("Persisted single champion model to Azure Blob Storage under '%s/trip_duration_model.joblib'", category)
+
+        else:
+            # Local storage backend - models live in MODELS_DIR (artifacts/models).
+            # Avoid duplicating files into data/models/.
+            if is_champion:
+                archive_dir = MODELS_DIR / "archive"
+                archive_dir.mkdir(parents=True, exist_ok=True)
+                for existing in MODELS_DIR.glob("*.joblib"):
+                    if existing.name != "latest_model.joblib" and existing.name != model_name:
+                        try:
+                            import shutil
+                            shutil.move(str(existing), str(archive_dir / existing.name))
+                            logger.info("Archived previous local model %s -> %s", existing.name, archive_dir)
+                        except Exception as move_err:
+                            logger.warning("Could not archive local model %s: %s", existing.name, move_err)
+                logger.info("Champion model maintained in %s as %s and latest_model.joblib", MODELS_DIR, model_name)
+            else:
+                logger.info(
+                    "Model %s did not beat current champion. Storing only under experiment tracking.",
+                    model_name,
+                )
+
+    except Exception as store_err:
+        logger.warning("Storage champion artifact management failed (non-critical): %s", store_err)
+
+
 def _trigger_api_reload() -> None:
     """Notify live FastAPI service to hot-reload the newly promoted champion model."""
     import requests
 
-    api_host = os.getenv("FLEETSENSE_API_HOST") or settings.api.host or "127.0.0.1"
-    api_port = os.getenv("FLEETSENSE_API_PORT") or settings.api.port or 8000
-    if api_host in ("0.0.0.0", ""):
-        api_host = "127.0.0.1"
-    reload_url = f"http://{api_host}:{api_port}/model/reload"
+    base_url = os.getenv("FLEETSENSE_API_URL") or os.getenv("API_BASE_URL")
+    if base_url:
+        reload_url = f"{base_url.rstrip('/')}/model/reload"
+    else:
+        api_host = os.getenv("FLEETSENSE_API_HOST") or settings.api.host or "127.0.0.1"
+        api_port = os.getenv("FLEETSENSE_API_PORT") or settings.api.port or 8000
+        if api_host in ("0.0.0.0", ""):
+            api_host = "127.0.0.1"
+        reload_url = f"http://{api_host}:{api_port}/model/reload"
+
+    headers: dict[str, str] = {}
+    metrics_key = os.getenv("FLEETSENSE_METRICS_API_KEY", "")
+    if metrics_key:
+        headers["X-Metrics-API-Key"] = metrics_key
 
     try:
         logger.info("Signaling running FleetSense API at %s to hot-reload model...", reload_url)
-        resp = requests.post(reload_url, timeout=5)
+        resp = requests.post(reload_url, headers=headers, timeout=5)
         if resp.status_code == 200:
             logger.info("Successfully reloaded model on live API service: %s", resp.json())
         else:
@@ -361,21 +463,24 @@ def _log_feature_importance(
         importances = None
         feature_names = None
 
-        if hasattr(model, "feature_importances_"):
-            importances = model.feature_importances_
+        # Unwrap TransformedTargetRegressor if present
+        underlying_model = getattr(model, "regressor_", model)
+
+        if hasattr(underlying_model, "feature_importances_"):
+            importances = underlying_model.feature_importances_
             feature_names = (
-                list(model.feature_names_in_)
-                if hasattr(model, "feature_names_in_")
+                list(underlying_model.feature_names_in_)
+                if hasattr(underlying_model, "feature_names_in_")
                 else [f"feature_{i}" for i in range(len(importances))]
             )
-        elif X_val is not None and y_val is not None and hasattr(model, "predict"):
+        elif X_val is not None and y_val is not None and hasattr(underlying_model, "predict"):
             # HistGradientBoostingRegressor uses permutation importance
             from sklearn.inspection import permutation_importance
 
             eval_X = X_val.head(1000) if len(X_val) > 1000 else X_val
             eval_y = y_val.head(1000) if len(y_val) > 1000 else y_val
             perm = permutation_importance(
-                model,
+                underlying_model,
                 eval_X,
                 eval_y,
                 n_repeats=5,
@@ -384,8 +489,8 @@ def _log_feature_importance(
             )
             importances = perm.importances_mean
             feature_names = (
-                list(model.feature_names_in_)
-                if hasattr(model, "feature_names_in_")
+                list(underlying_model.feature_names_in_)
+                if hasattr(underlying_model, "feature_names_in_")
                 else list(eval_X.columns)
             )
 
@@ -409,6 +514,10 @@ def _log_feature_importance(
             fi_path.parent.mkdir(parents=True, exist_ok=True)
             fi_path.write_text(summary, encoding="utf-8")
             tracker.log_artifact(fi_path)
+            try:
+                fi_path.unlink()
+            except OSError:
+                pass
         else:
             logger.info(
                 "Model %s does not expose feature_importances_ and no validation data was available.",
@@ -470,7 +579,7 @@ def train_flow(
     feature_filename: str | None = None,
     algorithm: str | None = None,
     use_all_months: bool = True,
-    max_history_months: int = 18,
+    max_history_months: int | None = None,
     skip_quality_gate: bool = False,
     val_cutoff: str | None = None,
     test_cutoff: str | None = None,
@@ -500,7 +609,8 @@ def train_flow(
     from fleetsense.core.constants.paths import METADATA_DIR
 
     METADATA_DIR.mkdir(parents=True, exist_ok=True)
-    flow_lock = FileLock(str(METADATA_DIR / "training_flow.lock"), timeout=5)
+    lock_timeout = int(os.getenv("FLEETSENSE_FLOW_LOCK_TIMEOUT", "60"))
+    flow_lock = FileLock(str(METADATA_DIR / "training_flow.lock"), timeout=lock_timeout)
 
     try:
         with flow_lock:

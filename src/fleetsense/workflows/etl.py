@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -7,7 +8,12 @@ import pandas as pd
 from prefect import flow, task
 
 from fleetsense.core.logger import get_logger
-from fleetsense.etl.ingestion import clean_and_process_dataset, run_ingestion
+from fleetsense.etl.ingestion import (
+    clean_and_process_dataset,
+    get_pending_unprocessed_files,
+    run_ingestion,
+)
+from fleetsense.etl.metadata import FeaturesMetadata, IngestionMetadata, ProcessedMetadata
 from fleetsense.ml.features import TARGET_COLUMN, create_features
 from fleetsense.storage.factory import get_storage
 
@@ -100,6 +106,20 @@ def feature_engineering_task(
         feature_files.append(str(saved_path))
         logger.info("Saved features to: %s", saved_path)
 
+        # Update features state management
+        try:
+            feat_meta = FeaturesMetadata()
+            ds_name = filename.split("_")[0] if "_" in filename else "yellow"
+            feat_meta.mark_feature_generated(
+                filename=filename,
+                dataset=ds_name,
+                row_count=len(features_df),
+                feature_columns=list(X.columns),
+                features_path=str(saved_path),
+            )
+        except Exception as f_meta_err:
+            logger.warning("Could not update features_state: %s", f_meta_err)
+
     return feature_files
 
 
@@ -138,7 +158,8 @@ def etl_flow(
     from fleetsense.core.constants.paths import METADATA_DIR
 
     METADATA_DIR.mkdir(parents=True, exist_ok=True)
-    etl_lock = FileLock(str(METADATA_DIR / "etl_flow.lock"), timeout=5)
+    lock_timeout = int(os.getenv("FLEETSENSE_FLOW_LOCK_TIMEOUT", "60"))
+    etl_lock = FileLock(str(METADATA_DIR / "etl_flow.lock"), timeout=lock_timeout)
 
     try:
         with etl_lock:
@@ -151,7 +172,18 @@ def etl_flow(
 
             files_to_clean: list[Path | str] = list(ingested_files)
 
-            # If no newly ingested files, allow reprocessing existing raw files from storage
+            # Metadata-driven self-healing: automatically check if any raw files are pending processing
+            if not files_to_clean:
+                pending_unprocessed = get_pending_unprocessed_files(dataset=dataset)
+                if pending_unprocessed:
+                    logger.info(
+                        "Found %d pending unprocessed file(s) in storage: %s",
+                        len(pending_unprocessed),
+                        pending_unprocessed,
+                    )
+                    files_to_clean = pending_unprocessed
+
+            # If still no pending files and reprocess_existing is forced, allow reprocessing raw files from storage
             if not files_to_clean:
                 storage = get_storage()
                 raw_files = sorted(storage.list_files("raw"))
@@ -192,7 +224,7 @@ def etl_flow(
 
             # Event-driven training trigger
             training_triggered = False
-            if trigger_training and feature_results:
+            if trigger_training:
                 logger.info("trigger_training=True: Automatically triggering train_flow...")
                 from fleetsense.workflows.train import train_flow
                 train_flow()

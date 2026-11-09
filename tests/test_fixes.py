@@ -1,4 +1,5 @@
 import collections
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -229,6 +230,63 @@ def test_drift_throttle_at_full_window():
     finally:
         drift._distance_window = orig_window
         drift._sample_counter = orig_counter
+
+
+def test_processed_and_features_state_management(tmp_path):
+    """Verify ProcessedMetadata and FeaturesMetadata record and query state properly."""
+    from fleetsense.etl.metadata import FeaturesMetadata, ProcessedMetadata
+
+    proc_path = tmp_path / "processed_state.json"
+    proc_meta = ProcessedMetadata(metadata_path=proc_path)
+    assert not proc_meta.is_processed("yellow_tripdata_2026-01.parquet")
+
+    proc_meta.mark_processed_file(
+        filename="yellow_tripdata_2026-01.parquet",
+        dataset="yellow",
+        report={"cleaned_rows": 100, "loss_percentage": 5.0},
+        processed_path="data/processed/yellow_tripdata_2026-01.parquet",
+    )
+    assert proc_meta.is_processed("yellow_tripdata_2026-01.parquet")
+
+    feat_path = tmp_path / "features_state.json"
+    feat_meta = FeaturesMetadata(metadata_path=feat_path)
+    assert not feat_meta.is_feature_generated("yellow_tripdata_2026-01.parquet")
+
+    feat_meta.mark_feature_generated(
+        filename="yellow_tripdata_2026-01.parquet",
+        dataset="yellow",
+        row_count=100,
+        feature_columns=["trip_distance", "VendorID"],
+        features_path="data/features/yellow_tripdata_2026-01.parquet",
+    )
+    assert feat_meta.is_feature_generated("yellow_tripdata_2026-01.parquet")
+
+
+def test_manage_storage_champion_artifacts_archives_previous_champion():
+    """Verify that when a new champion arrives, previous champion is archived and deleted."""
+    from fleetsense.workflows.train import _manage_storage_champion_artifacts
+
+    mock_storage = MagicMock()
+    mock_storage.list_files.return_value = ["old_champion.joblib"]
+
+    with patch("fleetsense.workflows.train.get_storage", return_value=mock_storage), \
+         patch.dict("os.environ", {"FLEETSENSE_STORAGE_BACKEND": "azure"}):
+
+        _manage_storage_champion_artifacts(
+            model_name="new_model.joblib",
+            local_model_path=Path("models/new_model.joblib"),
+            latest_model_path=Path("models/latest_model.joblib"),
+            is_champion=True,
+        )
+
+        mock_storage.container_client.get_blob_client.assert_called()
+        mock_storage.delete.assert_called_with("models/champion", "old_champion.joblib")
+        mock_storage.save_file.assert_any_call(
+            Path("models/new_model.joblib"),
+            category="models/champion",
+            filename="trip_duration_model.joblib",
+        )
+
 
 
 

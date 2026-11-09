@@ -68,7 +68,7 @@
       "type": "stat",
       "targets": [
         {
-          "expr": "fleetsense_model_loaded",
+          "expr": "max(fleetsense_model_loaded)",
           "legendFormat": "Loaded Status"
         }
       ]

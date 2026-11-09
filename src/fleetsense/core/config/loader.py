@@ -10,9 +10,6 @@ try:
     from dotenv import load_dotenv
 
     load_dotenv()
-    env_mode = os.getenv("ENVIRONMENT") or os.getenv("FLEETSENSE_APP_ENV")
-    if env_mode:
-        load_dotenv(f".env.{env_mode}")
 except ImportError:
     pass
 
@@ -111,25 +108,27 @@ def load_settings(
                 else:
                     config_data["model"] = model_data
 
-    # Allow environment variables to override storage backend and azure settings
-    storage_dict = config_data.get("storage", {})
+    # Legacy and convenience direct environment variable overrides
     env_backend = os.getenv("FLEETSENSE_STORAGE_BACKEND") or os.getenv("STORAGE_BACKEND")
     if env_backend:
-        storage_dict["backend"] = env_backend
+        storage_dict = config_data.setdefault("storage", {})
+        storage_dict["backend"] = env_backend.lower()
+
     env_azure_conn = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
     if env_azure_conn is not None:
+        storage_dict = config_data.setdefault("storage", {})
         storage_dict["azure_connection_string"] = env_azure_conn
+
     env_azure_container = os.getenv("AZURE_STORAGE_CONTAINER_NAME") or os.getenv("AZURE_CONTAINER_NAME")
     if env_azure_container:
+        storage_dict = config_data.setdefault("storage", {})
         storage_dict["azure_container_name"] = env_azure_container
-    config_data["storage"] = storage_dict
 
     # Allow environment variables to override app environment
     env_app_env = os.getenv("FLEETSENSE_APP_ENV") or os.getenv("ENVIRONMENT")
     if env_app_env:
-        app_dict = config_data.get("app", {})
-        app_dict["environment"] = env_app_env
-        config_data["app"] = app_dict
+        app_dict = config_data.setdefault("app", {})
+        app_dict["environment"] = env_app_env.lower()
 
     _apply_env_overrides(config_data)
 

@@ -1,5 +1,6 @@
 from fleetsense.monitoring.drift import (
     DRIFT_ALERTS_TOTAL,
+    check_and_alert_batch_drift,
     check_and_alert_drift,
 )
 from fleetsense.monitoring.metrics import (
@@ -24,6 +25,7 @@ __all__ = [
     "MODEL_LOAD_STATUS",
     "DRIFT_ALERTS_TOTAL",
     "check_and_alert_drift",
+    "check_and_alert_batch_drift",
     "record_prediction",
     "record_batch_predictions",
     "set_model_status",

@@ -8,10 +8,9 @@ rule_files:
 scrape_configs:
   - job_name: "fleetsense-api"
     metrics_path: "/metrics"
-    # If FLEETSENSE_METRICS_API_KEY is configured on the API, mount or supply bearer_token
-    # bearer_token: "${FLEETSENSE_METRICS_API_KEY}"
+    scheme: "http"
     static_configs:
-      - targets: ["api:8000"]
+      - targets: ["fleetsense-api:8000", "fleetsense-api:80"]
         labels:
           service: "fleetsense-inference-service"
           environment: "production"

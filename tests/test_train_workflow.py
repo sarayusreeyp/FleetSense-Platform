@@ -25,6 +25,10 @@ def sample_feature_df():
             "pickup_month": [10 for _ in range(20)],
             "pickup_day": [1 + (i % 28) for i in range(20)],
             "is_weekend": [1 if (i % 7) >= 5 else 0 for i in range(20)],
+            "pickup_hour_sin": [0.0 for _ in range(20)],
+            "pickup_hour_cos": [1.0 for _ in range(20)],
+            "is_rush_hour": [0 for _ in range(20)],
+            "PU_DO_pair": pd.Series([f"{100+i}_{150+i}" for i in range(20)], dtype="category"),
             "trip_duration_minutes": [10.0 + i * 2.5 for i in range(20)],
         }
     )

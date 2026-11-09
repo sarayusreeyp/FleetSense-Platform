@@ -20,10 +20,10 @@ logging:
 storage:
   backend: local
   local_data_dir: data
-  azure_container_name: "fleetsense-data"
+  azure_container_name: "fleetsense-production"
   azure_connection_string: ""
 
 ingestion:
   dataset: yellow
-  start_year: 2026
-  start_month: 1
+  start_year: 2025
+  start_month: 3

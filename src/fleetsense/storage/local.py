@@ -1,42 +1,66 @@
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
 import pandas as pd
 
 from fleetsense.core.exceptions.storage import (
+    StorageError,
     StorageFileNotFoundError,
     StorageWriteError,
 )
-from fleetsense.storage.base import Storage
+from fleetsense.storage.base import CANONICAL_STORAGE_CATEGORIES, Storage
+
+_SAFE_CATEGORY_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]+(/[a-zA-Z0-9_\-]+)*$")
 
 
 class LocalStorage(Storage):
     """
     Local filesystem storage backend with atomic operations and streaming support.
+    Maintains 1:1 structural parity with cloud storage backends.
     """
 
     def __init__(self, root_dir: str | Path = "data") -> None:
         self.root = Path(root_dir).resolve()
 
+        # Initialize canonical storage directories for exact parity with cloud
         self.raw_dir = self.root / "raw"
         self.processed_dir = self.root / "processed"
         self.features_dir = self.root / "features"
         self.models_dir = self.root / "models"
+        self.metadata_dir = self.root / "metadata"
+        self.tmp_dir = self.root / "tmp"
 
         for directory in (
             self.raw_dir,
             self.processed_dir,
             self.features_dir,
             self.models_dir,
+            self.metadata_dir,
+            self.tmp_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
     def _get_category_dir(self, category: str) -> Path:
-        """Resolve and ensure category subdirectory exists."""
-        safe_category = Path(category).name
-        target_dir = self.root / safe_category
+        """Validate and resolve category subdirectory, ensuring it exists."""
+        if not category or not isinstance(category, str):
+            raise StorageError(message="Storage category must be a non-empty string.")
+
+        clean_category = category.strip()
+        if not _SAFE_CATEGORY_PATTERN.match(clean_category):
+            raise StorageError(
+                message=f"Invalid storage category '{category}'. Must be alphanumeric.",
+                details={"category": category},
+            )
+
+        target_dir = (self.root / clean_category).resolve()
+        if not str(target_dir).startswith(str(self.root)):
+            raise StorageError(
+                message="Path traversal detected in category.",
+                details={"category": category},
+            )
         target_dir.mkdir(parents=True, exist_ok=True)
         return target_dir
 
@@ -197,8 +221,11 @@ class LocalStorage(Storage):
     def save_features(self, filename: str, data: bytes) -> Path:
         return self._save_bytes(self.features_dir, filename, data)
 
-    def exists(self, relative_path: str) -> bool:
-        target = self.root / relative_path
+    def exists(self, relative_path: str, filename: str | None = None) -> bool:
+        if filename is not None:
+            target = self._get_category_dir(relative_path) / Path(filename).name
+        else:
+            target = (self.root / relative_path).resolve()
         return target.exists()
 
     def load(self, relative_path: str) -> bytes:

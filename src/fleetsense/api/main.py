@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import collections
 import os
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -26,14 +27,32 @@ from fleetsense.core.logger import get_logger
 from fleetsense.monitoring import (
     HTTP_REQUEST_DURATION_SECONDS,
     HTTP_REQUESTS_TOTAL,
+    check_and_alert_batch_drift,
+    check_and_alert_drift,
     get_latest_metrics,
     record_batch_predictions,
     record_prediction,
     set_model_status,
 )
-from fleetsense.monitoring.drift import check_and_alert_drift
 
 logger = get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Service initialization lock to prevent duplicate parallel downloads during cold starts
+_service_init_lock = threading.Lock()
+
+
+def get_prediction_service() -> PredictionService:
+    """Thread-safe singleton accessor for PredictionService."""
+    service = getattr(app.state, "prediction_service", None)
+    if service is None:
+        with _service_init_lock:
+            service = getattr(app.state, "prediction_service", None)
+            if service is None:
+                service = PredictionService()
+                app.state.prediction_service = service
+    return service
+
 
 # ---------------------------------------------------------------------------
 # Rate Limiter (Gap 19 - zero third-party dependency sliding window)
@@ -86,7 +105,7 @@ def _get_client_ip(request: Request) -> str:
 # ---------------------------------------------------------------------------
 # /metrics API Key security (Gap 21)
 # ---------------------------------------------------------------------------
-METRICS_API_KEY = os.getenv("FLEETSENSE_METRICS_API_KEY", "")
+METRICS_API_KEY = os.getenv("FLEETSENSE_METRICS_API_KEY") or os.getenv("METRICS_API_KEY") or ""
 _metrics_api_key_header = APIKeyHeader(name="X-Metrics-API-Key", auto_error=False)
 
 
@@ -111,20 +130,26 @@ def _require_metrics_key(
 # Allowed CORS origins (Gap 20)
 # ---------------------------------------------------------------------------
 def _get_allowed_origins() -> list[str]:
-    """Return allowed CORS origins from env var; defaults to deny-all in production."""
+    """Return allowed CORS origins from env var; defaults to localhost + common dev/prod origins."""
     raw = os.getenv("CORS_ALLOWED_ORIGINS", "")
     if raw.strip():
         return [o.strip() for o in raw.split(",") if o.strip()]
     env = settings.app.environment
+    # Allow local frontend ports by default, and log guidance for custom prod domains
+    default_origins = [
+        "http://localhost:3000",
+        "http://localhost:8080",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:8080",
+    ]
     if env in ("production", "staging"):
-        logger.warning(
-            "CORS_ALLOWED_ORIGINS is not set in %s. Cross-origin requests will be blocked. "
-            "Set CORS_ALLOWED_ORIGINS=https://yourdomain.com",
+        logger.info(
+            "CORS_ALLOWED_ORIGINS not explicitly configured in %s; using default dashboard origins %s. "
+            "Set CORS_ALLOWED_ORIGINS=https://yourdomain.com for custom domains.",
             env,
+            default_origins,
         )
-        return []
-    # Development / testing: allow localhost only
-    return ["http://localhost:3000", "http://localhost:8080", "http://127.0.0.1:3000"]
+    return default_origins
 
 
 @asynccontextmanager
@@ -157,13 +182,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Restrict CORS (Gap 20)
+# Restrict CORS (Gap 20 & W3C compliance)
+_cors_origins = _get_allowed_origins()
+_has_wildcard_origin = "*" in _cors_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_get_allowed_origins(),
-    allow_credentials=True,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
+    allow_origins=_cors_origins,
+    allow_credentials=not _has_wildcard_origin,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -274,16 +302,14 @@ async def health_check() -> HealthResponse:
     "/model/reload",
     tags=["Management"],
     summary="Hot-Reload Active Model from MLflow Registry",
+    dependencies=[Depends(_require_metrics_key)],
 )
 async def reload_active_model(request: Request) -> dict[str, Any]:
     """
     Trigger dynamic hot-reloading of the ML model from the MLflow Model Registry
-    without restarting the API server.
+    without restarting the API server. Protected by admin/metrics API key.
     """
-    service: PredictionService = getattr(app.state, "prediction_service", None)
-    if not service:
-        service = PredictionService()
-        app.state.prediction_service = service
+    service = get_prediction_service()
 
     reload_result = service.reload_model()
     set_model_status(
@@ -334,10 +360,7 @@ async def predict_trip(
             detail="Rate limit exceeded. Maximum 60 requests per minute.",
         )
 
-    service: PredictionService = getattr(app.state, "prediction_service", None)
-    if not service:
-        service = PredictionService()
-        app.state.prediction_service = service
+    service = get_prediction_service()
 
     if service.model is None:
         raise HTTPException(
@@ -396,10 +419,14 @@ async def predict_trip(
             exc,
             exc_info=True,
         )
-        raise HTTPException(
+        return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Inference error occurred while processing the request.",
-        ) from exc
+            content={
+                "error_code": "API-500",
+                "message": "Inference error occurred while processing the request.",
+                "details": {"error": str(exc)},
+            },
+        )
 
 
 @app.post(
@@ -424,10 +451,7 @@ async def predict_batch(
             detail="Rate limit exceeded. Maximum 20 batch requests per minute.",
         )
 
-    service: PredictionService = getattr(app.state, "prediction_service", None)
-    if not service:
-        service = PredictionService()
-        app.state.prediction_service = service
+    service = get_prediction_service()
 
     if service.model is None:
         raise HTTPException(
@@ -462,13 +486,12 @@ async def predict_batch(
             status="success",
         )
 
-        # Offload drift check for all batch trips to background tasks
-        for dist, dur in zip(distances, durations):
-            background_tasks.add_task(
-                check_and_alert_drift,
-                trip_distance=dist,
-                predicted_duration_minutes=dur,
-            )
+        # Offload batch drift check as a single background task (zero event loop lag)
+        background_tasks.add_task(
+            check_and_alert_batch_drift,
+            distances=distances,
+            predicted_durations=durations,
+        )
 
         return result
     except HTTPException:
@@ -487,7 +510,11 @@ async def predict_batch(
             exc,
             exc_info=True,
         )
-        raise HTTPException(
+        return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Batch inference error occurred while processing the request.",
-        ) from exc
+            content={
+                "error_code": "API-500",
+                "message": "Batch inference error occurred while processing the request.",
+                "details": {"error": str(exc)},
+            },
+        )

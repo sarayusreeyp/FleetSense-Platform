@@ -4,6 +4,9 @@ datasources:
   - name: Prometheus
     type: prometheus
     access: proxy
-    url: http://prometheus:9090
+    url: ${PROMETHEUS_URL}
     isDefault: true
-    editable: false
+    editable: true
+    jsonData:
+      httpMethod: GET
+      tlsSkipVerify: true

@@ -24,8 +24,8 @@ def test_settings_loaded():
     assert settings.logging.level == "INFO"
     assert settings.storage.backend in {"local", "azure"}
     assert settings.ingestion.dataset == "yellow"
-    assert settings.ingestion.start_year == 2026
-    assert settings.ingestion.start_month == 1
+    assert settings.ingestion.start_year == 2025
+    assert settings.ingestion.start_month == 3
     assert settings.model.algorithm in {"XGBRegressor", "HistGradientBoostingRegressor", "RandomForestRegressor"}
     assert settings.model.target_column == "trip_duration_minutes"
 
@@ -50,7 +50,7 @@ def test_load_settings_env_var(tmp_path: Path, monkeypatch):
 app:
   name: CustomApp
   version: "0.2.0"
-  environment: testing
+  environment: test
 data:
   raw_data_path: test/raw
   processed_data_path: test/proc

@@ -1,0 +1,8 @@
+FROM grafana/grafana:10.3.3
+
+ENV PROMETHEUS_URL=http://fleetsense-prometheus:9090
+
+COPY deploy/monitoring/grafana/provisioning/datasources /etc/grafana/provisioning/datasources
+COPY deploy/monitoring/grafana/provisioning/dashboards /etc/grafana/provisioning/dashboards
+
+EXPOSE 3000
